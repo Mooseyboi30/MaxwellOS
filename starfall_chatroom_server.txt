@@ -1,0 +1,1620 @@
+--@name Chatroom Server
+--@author v27.3
+--@shared
+
+-- Match NETWORK in the computer chip. Set the room name and password on the linked screen.
+local NETWORK = "lobby"
+local CHIP_VERSION = "27.3"
+local POSTS_TOP, POSTS_BOTTOM = 160, 480
+local POSTS_TRACK_X = 473
+local MEMBERS_PER_PAGE = 8
+local MEMBER_TOP = 132
+local MEMBER_HEIGHT = 40
+
+if SERVER then
+
+local roomName
+local password = ""
+local PROTOCOL = "sf_chatroom_v2"
+local HISTORY_LIMIT = 24
+local history = {}
+local channels = {{name = "General", history = history, sequence = 0}}
+local channelOrder = {1}
+local nextChannelId = 1
+local lastPost = {}
+local filterStrikes = {}
+local nextJoin = {}
+local sessions = {}
+local games = {}
+local MULTIPLAYER_GAME_NAMES = {tic = "Tic-Tac-Toe", chess = "Chess", battleship = "Battleship", trail = "Oregon Trail"}
+local gameSequence, gameRevision = 0, 0
+local WIN_LINES = {{1,2,3}, {4,5,6}, {7,8,9}, {1,4,7}, {2,5,8}, {3,6,9}, {1,5,9}, {3,5,7}}
+local bans = {}
+local bansById = {}
+local banPage = 1
+local sessionSequence = 0
+local boardReady = false
+local boardDirty = true
+local postsDirty = true
+local postsChannel = 1
+
+local blockedWords = {}
+local blockedByInitial = {}
+for word in ([[
+    nigger nigga niggah niggress
+    faggot fag faggotry
+    chink gook kike spic spick wetback beaner
+    raghead towelhead sandnigger
+    tranny shemale dyke
+    retard retarded
+]]):gmatch("%S+") do
+    blockedWords[#blockedWords + 1] = word
+    local first = word:byte(1)
+    local matches = blockedByInitial[first] or {}
+    matches[#matches + 1] = word
+    blockedByInitial[first] = matches
+end
+
+local function isWordByte(byte)
+    return byte ~= nil and ((byte >= 97 and byte <= 122) or (byte >= 48 and byte <= 57))
+end
+
+local function cleanChatText(value)
+    local chars = {}
+    local first, last
+    for i = 1, #value do
+        local byte = value:byte(i)
+        if byte <= 32 or byte == 127 then
+            chars[i] = " "
+        else
+            chars[i] = value:sub(i, i)
+            first, last = first or i, i
+        end
+    end
+    return first and table.concat(chars, "", first, last) or ""
+end
+
+local function containsSlur(message)
+    local lower = message:lower()
+    for start = 1, #lower do
+        local words = blockedByInitial[lower:byte(start)]
+        if words and (start == 1 or not isWordByte(lower:byte(start - 1))) then
+            for _, word in ipairs(words) do
+                local pos, letter = start + 1, 2
+                while letter <= #word do
+                    while pos <= #lower and not isWordByte(lower:byte(pos)) do pos = pos + 1 end
+                    if lower:byte(pos) ~= word:byte(letter) then break end
+                    pos, letter = pos + 1, letter + 1
+                end
+                if letter > #word then
+                    if lower:byte(pos) == 115 then pos = pos + 1 end
+                    if not isWordByte(lower:byte(pos)) then return true end
+                end
+            end
+        end
+    end
+    return false
+end
+
+local function containsSlurInName(name)
+    local compact = name:lower():gsub("%W", "")
+    for _, word in ipairs(blockedWords) do
+        if compact:find(word, 1, true) then return true end
+    end
+    return false
+end
+
+if wire then
+    wire.adjustOutputs({"RoomServer"}, {"entity"})
+    wire.ports.RoomServer = chip()
+end
+
+local function playerIdentity(ply)
+    local steamID64 = ply:getSteamID64()
+    if steamID64 and steamID64:match("^[1-9]%d*$") then return steamID64 end
+    local steamID = ply:getSteamID()
+    if steamID and steamID:match("^STEAM_%d+:%d+:%d+$") then return steamID end
+    return ply
+end
+
+local function addHistory(author, message, line, alert, channelId)
+    for _, i in ipairs(channelId and {channelId} or channelOrder) do
+        local channel = channels[i]
+        channel.sequence = channel.sequence + 1
+        local posts = channel.history
+        posts[#posts + 1] = {id = channel.sequence, line = line, author = author, message = message, alert = alert}
+        if #posts > HISTORY_LIMIT then table.remove(posts, 1) end
+        if i == postsChannel then postsDirty = true end
+    end
+end
+
+local function findComputer(name, now, except)
+    for sender, session in pairs(sessions) do
+        if sender ~= except and session.nameKey == name and not session.removed
+            and now < session.expires and sender:isValid() and session.owner:isValid() then
+            return session
+        end
+    end
+end
+
+local function privateState(session, now)
+    local recipients = {}
+    for peer, entry in pairs(sessions) do
+        if entry.identity ~= session.identity and not entry.removed and now < entry.expires
+            and peer:isValid() and entry.owner:isValid() then
+            recipients[#recipients + 1] = {id = entry.id, name = entry.name}
+        end
+    end
+    table.sort(recipients, function(a, b) return a.name:lower() < b.name:lower() end)
+    return {recipients = recipients, messages = session.privateMessages, revision = session.privateRevision}
+end
+
+local function appendPrivate(session, line)
+    local messages = session.privateMessages
+    messages[#messages + 1] = line
+    if #messages > 12 then table.remove(messages, 1) end
+    session.privateRevision = session.privateRevision + 1
+end
+
+local function paymentRecipients(payer, now, requestedId)
+    local host = owner()
+    local recipients = {}
+    if host:isValid() and host ~= payer then
+        if requestedId == 0 then return host, "Server owner", host:getName(), chip() end
+        recipients[1] = {id = 0, name = "Server owner", playerName = host:getName()}
+    end
+    local players = {}
+    for sender, session in pairs(sessions) do
+        local player = session.owner
+        if player ~= payer and player ~= host and not session.removed
+            and now < session.expires and sender:isValid() and player:isValid() then
+            if requestedId == session.id then return player, session.name, player:getName(), sender end
+            local previous = players[player]
+            if not previous or session.id < previous.id then players[player] = session end
+        end
+    end
+    if requestedId ~= nil then return end
+    for player, session in pairs(players) do
+        recipients[#recipients + 1] = {id = session.id, name = session.name, playerName = player:getName()}
+    end
+    table.sort(recipients, function(a, b) return a.id < b.id end)
+    return recipients
+end
+
+local function requestPaymentFrom(payer, amount)
+    local api = economy and economy.requestMoney and economy or (darkrp and darkrp.requestMoney and darkrp)
+    if not api then return "The in-game payment API is unavailable." end
+    local ok, result = pcall(function()
+        if api.canMakeMoneyRequest and not api.canMakeMoneyRequest(payer) then
+            return "A payment request is pending or on cooldown."
+        end
+        if api.canAfford and not api.canAfford(payer, amount) then return "You cannot afford this payment." end
+        api.requestMoney(payer, amount, "Chatroom payment", nil, nil, nil)
+        return "ok"
+    end)
+    return ok and result or "Payment prompt failed. Check Starfall permissions."
+end
+
+local function closeGame(session)
+    local game = session and session.game
+    if not game then return end
+    for _, player in ipairs(game.party or {game.host, game.guest}) do
+        if player ~= session then
+            player.gameDeparture = {
+                variant = game.variant,
+                message = session.name .. " left " .. MULTIPLAYER_GAME_NAMES[game.variant]
+            }
+        end
+        player.game = nil
+    end
+    games[game.id] = nil
+    gameRevision = gameRevision + 1
+end
+
+local CHESS_START = "rnbqkbnrpppppppp................................PPPPPPPPRNBQKBNR"
+local PROMOTIONS = {"q", "r", "b", "n"}
+
+local function pieceAt(board, square)
+    return board:sub(square, square)
+end
+
+local function setPiece(board, square, piece)
+    return board:sub(1, square - 1) .. piece .. board:sub(square + 1)
+end
+
+local function isWhite(piece)
+    return piece ~= "." and piece == piece:upper()
+end
+
+local function geometry(board, from, to, piece, attacksOnly)
+    local dx = (to - 1) % 8 - (from - 1) % 8
+    local dy = math.floor((to - 1) / 8) - math.floor((from - 1) / 8)
+    local ax, ay = math.abs(dx), math.abs(dy)
+    local kind = piece:lower()
+    if from == to then return false end
+    if kind == "p" then
+        local direction = isWhite(piece) and -1 or 1
+        if attacksOnly then return ax == 1 and dy == direction end
+        if dx ~= 0 or pieceAt(board, to) ~= "." then return false end
+        if dy == direction then return true end
+        local start = isWhite(piece) and 6 or 1
+        return dy == direction * 2 and math.floor((from - 1) / 8) == start
+            and pieceAt(board, from + direction * 8) == "."
+    end
+    if kind == "n" then return ax * ay == 2 end
+    if kind == "k" then return ax <= 1 and ay <= 1 end
+    local straight, diagonal = dx == 0 or dy == 0, ax == ay
+    if not ((kind == "r" and straight) or (kind == "b" and diagonal)
+        or (kind == "q" and (straight or diagonal))) then return false end
+    local step = (dx == 0 and 0 or (dx > 0 and 1 or -1)) + (dy == 0 and 0 or (dy > 0 and 8 or -8))
+    for square = from + step, to - step, step do
+        if pieceAt(board, square) ~= "." then return false end
+    end
+    return true
+end
+
+local function attacked(board, square, byWhite)
+    for from = 1, 64 do
+        local piece = pieceAt(board, from)
+        if piece ~= "." and isWhite(piece) == byWhite and geometry(board, from, square, piece, true) then return true end
+    end
+    return false
+end
+
+local function inCheck(board, white)
+    return attacked(board, board:find(white and "K" or "k", 1, true), not white)
+end
+
+local function chessMove(game, from, to, white, promotion)
+    local board = game.board
+    local piece, target = pieceAt(board, from), pieceAt(board, to)
+    if piece == "." or isWhite(piece) ~= white or (target ~= "." and isWhite(target) == white)
+        or target:lower() == "k" then return end
+    local kind = piece:lower()
+    local dx = (to - 1) % 8 - (from - 1) % 8
+    local rookFrom, rookTo, capture
+    local home = white and 61 or 5
+    if kind == "k" and from == home and (to == home + 2 or to == home - 2) then
+        local step = to > from and 1 or -1
+        local right = step == 1 and "k" or "q"
+        if white then right = right:upper() end
+        if not game.rights:find(right, 1, true) then return end
+        rookFrom, rookTo = home + (step == 1 and 3 or -4), home + step
+        if pieceAt(board, rookFrom) ~= (white and "R" or "r") then return end
+        for square = from + step, rookFrom - step, step do
+            if pieceAt(board, square) ~= "." then return end
+        end
+        local crossing = setPiece(setPiece(board, from, "."), rookTo, piece)
+        if inCheck(board, white) or attacked(crossing, rookTo, not white) then return end
+    elseif kind == "p" and dx ~= 0 then
+        if not geometry(board, from, to, piece, true) then return end
+        if target == "." then
+            if to ~= game.enPassant then return end
+            capture = to + (white and 8 or -8)
+            if pieceAt(board, capture) ~= (white and "p" or "P") then return end
+        end
+    elseif not geometry(board, from, to, piece, false) then
+        return
+    end
+
+    local placed = piece
+    if kind == "p" and (to <= 8 or to > 56) then
+        placed = white and promotion:upper() or promotion
+    end
+    board = setPiece(setPiece(board, from, "."), to, placed)
+    if capture then board = setPiece(board, capture, ".") end
+    if rookFrom then board = setPiece(setPiece(board, rookFrom, "."), rookTo, white and "R" or "r") end
+    if inCheck(board, white) then return end
+    return board
+end
+
+local FLEET_LENGTHS = {5, 4, 3, 3, 2}
+local SHIP_NAMES = {"Carrier", "Battleship", "Cruiser", "Submarine", "Destroyer"}
+local FLEET_CELLS = 17
+
+local function fleetsReady(game)
+    return game.guest ~= nil and #game.placements.X == #FLEET_LENGTHS and #game.placements.O == #FLEET_LENGTHS
+end
+
+local function placeShip(game, mark, value)
+    if fleetsReady(game) then return "Both fleets are ready. Placement is locked." end
+    local ships, fleet = game.placements[mark], game.fleets[mark]
+    if value == 301 then
+        local last = table.remove(ships)
+        if not last then return "No ships to undo." end
+        for i = 0, last.length - 1 do fleet[last.square + i * last.step] = nil end
+        return "ok"
+    end
+    local length = FLEET_LENGTHS[#ships + 1]
+    if not length then return "Your fleet is already placed." end
+    local step = value > 200 and 10 or 1
+    local square = value - (step == 10 and 200 or 100)
+    local edge = step == 1 and (square - 1) % 10 or math.floor((square - 1) / 10)
+    if edge + length > 10 then return "That ship goes off the grid." end
+    for i = 0, length - 1 do
+        if fleet[square + i * step] then return "Ships cannot overlap." end
+    end
+    local ship = {square = square, step = step, length = length, name = SHIP_NAMES[#ships + 1], hits = 0}
+    for i = 0, length - 1 do fleet[square + i * step] = ship end
+    ships[#ships + 1] = ship
+    return "ok"
+end
+
+local function battleshipBoards(game, mark)
+    local opponent = mark == "X" and "O" or "X"
+    local target, own = {}, {}
+    for square = 1, 100 do
+        target[square] = game.shots[mark][square] or "."
+        own[square] = game.shots[opponent][square] or (game.fleets[mark][square] and "S" or ".")
+    end
+    return table.concat(target), table.concat(own)
+end
+
+local function resetGame(game)
+    game.board = game.variant == "chess" and CHESS_START or "........."
+    game.turn, game.winner, game.rematchRequester = "X", "", nil
+    game.rights, game.enPassant = "KQkq", nil
+    game.moves, game.ply = {}, 0
+    if game.variant == "battleship" then
+        game.fleets = {X = {}, O = {}}
+        game.placements = {X = {}, O = {}}
+        game.shots = {X = {}, O = {}}
+        game.hits = {X = 0, O = 0}
+        game.sunk = {X = 0, O = 0}
+        game.lastShot = ""
+        game.lastShotHit = false
+    end
+end
+
+local function fileName(square)
+    return string.char(97 + (square - 1) % 8)
+end
+
+local function rankName(square)
+    return tostring(8 - math.floor((square - 1) / 8))
+end
+
+local function chessNotation(game, from, to, white, promotion)
+    local board = game.board
+    local piece = pieceAt(board, from)
+    local kind = piece:upper()
+    if kind == "K" and math.abs(to - from) == 2 then return to > from and "O-O" or "O-O-O" end
+    local capture = pieceAt(board, to) ~= "." or (kind == "P" and fileName(from) ~= fileName(to))
+    local prefix = kind == "P" and (capture and fileName(from) or "") or kind
+    if kind ~= "P" and kind ~= "K" then
+        local ambiguous, sameFile, sameRank = false, false, false
+        for candidate = 1, 64 do
+            if candidate ~= from and pieceAt(board, candidate) == piece
+                and chessMove(game, candidate, to, white, "q") then
+                ambiguous = true
+                sameFile = sameFile or fileName(candidate) == fileName(from)
+                sameRank = sameRank or rankName(candidate) == rankName(from)
+            end
+        end
+        if ambiguous then
+            if not sameFile then prefix = prefix .. fileName(from)
+            elseif not sameRank then prefix = prefix .. rankName(from)
+            else prefix = prefix .. fileName(from) .. rankName(from) end
+        end
+    end
+    local suffix = kind == "P" and (to <= 8 or to > 56) and ("=" .. promotion:upper()) or ""
+    return prefix .. (capture and "x" or "") .. fileName(to) .. rankName(to) .. suffix
+end
+
+local function hasChessMove(game, white)
+    for from = 1, 64 do
+        local piece = pieceAt(game.board, from)
+        if piece ~= "." and isWhite(piece) == white then
+            for to = 1, 64 do
+                if chessMove(game, from, to, white, "q") then return true end
+            end
+        end
+    end
+    return false
+end
+
+local function playChess(game, value, mark)
+    local from = math.floor(value / 256)
+    local to = math.floor(value / 4) % 64 + 1
+    if from < 1 or from > 64 then return "Choose a piece and a destination." end
+    local white = mark == "X"
+    local piece = pieceAt(game.board, from):lower()
+    local promotion = PROMOTIONS[value % 4 + 1]
+    local board = chessMove(game, from, to, white, promotion)
+    if not board then return "Illegal move." end
+    local notation = chessNotation(game, from, to, white, promotion)
+    game.board = board
+    game.enPassant = piece == "p" and math.abs(from - to) == 16 and (from + to) / 2 or nil
+    if piece == "k" then game.rights = game.rights:gsub(white and "[KQ]" or "[kq]", "") end
+    for square, right in pairs({[1] = "q", [8] = "k", [57] = "Q", [64] = "K"}) do
+        if from == square or to == square then game.rights = game.rights:gsub(right, "") end
+    end
+    local check = inCheck(board, not white)
+    if not hasChessMove(game, not white) then game.winner = check and mark or "draw" end
+    if check then notation = notation .. (game.winner == mark and "#" or "+") end
+    game.ply = game.ply + 1
+    game.moves[#game.moves + 1] = notation
+    if #game.moves > 64 then table.remove(game.moves, 1) end
+end
+
+local TRAIL_STOPS = {
+    {300, "Kansas River", "river"}, {480, "Fort Kearny", "fort"},
+    {830, "Platte River", "river"}, {1100, "Fort Laramie", "fort"},
+    {1450, "Snake River", "river"}, {1690, "Fort Boise", "fort"}
+}
+local TRAIL_END = 2000
+local TRAIL_TRAVEL = {"Travel steadily", "Push the pace", "Rest", "Forage"}
+local TRAIL_RIVER = {"Ford the river", "Pay $8 for a ferry", "Wait for calmer water"}
+local TRAIL_FORT = {"Continue west", "Buy 45 food for $10", "Repair wagon for $8", "Rest"}
+
+local function newTrail()
+    return {miles = 0, day = 1, food = 145, health = 100, wagon = 100, money = 34,
+        nextStop = 1, selected = 1, event = "Your wagon leaves Independence. Oregon is 2,000 miles away."}
+end
+
+local function trailChoices(state)
+    if state.stop and state.stop[3] == "river" then return TRAIL_RIVER end
+    if state.stop and state.stop[3] == "fort" then return TRAIL_FORT end
+    return TRAIL_TRAVEL
+end
+
+local function advanceTrail(state, miles)
+    local stop = TRAIL_STOPS[state.nextStop]
+    state.miles = math.min(TRAIL_END, state.miles + miles)
+    if stop and state.miles >= stop[1] then
+        state.miles, state.stop = stop[1], stop
+        state.nextStop, state.selected, state.waited = state.nextStop + 1, 1, false
+        state.event = state.event .. " You reached " .. stop[2] .. "."
+    end
+end
+
+local function takeTrailTurn(state)
+    local choice = state.selected
+    local location = state.stop and state.stop[3]
+    local foodCost, days = 0, 1
+    if location == "river" then
+        if choice == 3 then
+            if state.waited then state.event = "The water is already calmer."; return end
+            state.waited, foodCost, days = true, 5, 2
+            state.event = "The river fell overnight. Fording is less risky now."
+        elseif choice == 2 then
+            if state.money < 8 then state.event = "You need $8 for the ferry."; return end
+            state.money, state.stop, state.selected = state.money - 8, nil, 1
+            foodCost = 5
+            state.event = "The ferry carried the wagon across safely."
+        else
+            local mishap = math.random(100) <= (state.waited and 12 or 38)
+            state.stop, state.selected, foodCost = nil, 1, 5
+            if mishap then
+                state.wagon, state.health, foodCost = state.wagon - 19, state.health - 12, 25
+                state.event = "The wagon took on water. You lost food and damaged the wagon."
+            else state.event = "You forded the river safely." end
+        end
+    elseif location == "fort" then
+        if choice == 1 then
+            state.stop, state.selected = nil, 1
+            state.event = "You left the fort and returned to the trail."
+            return
+        elseif choice == 2 then
+            if state.money < 10 then state.event = "You need $10 for food."; return end
+            state.money, state.food, days = state.money - 10, state.food + 45, 0
+            state.event = "You bought 45 food."
+        elseif choice == 3 then
+            if state.money < 8 then state.event = "You need $8 for repairs."; return end
+            if state.wagon >= 100 then state.event = "The wagon is already in good repair."; return end
+            state.money, state.wagon = state.money - 8, math.min(100, state.wagon + 40)
+            state.event = "The fort's wheelwright repaired your wagon."
+        else
+            state.health, foodCost = math.min(100, state.health + 22), 6
+            state.event = "Your party rested at the fort."
+        end
+    elseif choice == 3 then
+        state.health, foodCost = math.min(100, state.health + 17), 7
+        state.event = "A day of rest helped the party recover."
+    elseif choice == 4 then
+        local found = math.random(14, 34)
+        state.food, foodCost = state.food + found, 5
+        state.event = "You found " .. found .. " food while foraging."
+    else
+        local fast = choice == 2
+        foodCost, days = fast and 14 or 10, 2
+        state.health = state.health - (fast and 8 or 2)
+        state.wagon = state.wagon - (fast and 7 or 2)
+        local event = math.random(100)
+        state.event = fast and "You pushed the wagon hard." or "You made steady progress."
+        if event <= 10 then
+            state.wagon = state.wagon - 10
+            state.event = "A rocky stretch damaged the wagon."
+        elseif event <= 20 then
+            state.health = state.health - 10
+            state.event = "Illness slowed the party."
+        elseif event <= 30 then
+            state.food = state.food + 12
+            state.event = "Other travelers shared some food."
+        end
+        advanceTrail(state, fast and 145 or 100)
+    end
+    state.day = state.day + days
+    if state.food < foodCost then
+        state.health = state.health - 16
+        state.event = state.event .. " The party went hungry."
+    end
+    state.food = math.max(0, state.food - foodCost)
+    if state.health <= 0 then state.result = "The party could not continue."
+    elseif state.wagon <= 0 then state.result = "The wagon broke down."
+    elseif state.miles >= TRAIL_END then state.result = "You reached Oregon!"
+    elseif state.day > 65 then state.result = "Winter closed the trail." end
+end
+
+local function gameAction(session, action, value, variant)
+    if action == "game_snapshot" and not MULTIPLAYER_GAME_NAMES[variant] then
+        return {supported = false}
+    end
+    variant = MULTIPLAYER_GAME_NAMES[variant] and variant or "tic"
+    if action == "game_state" or action == "game_snapshot" then
+        if value == gameRevision then
+            if action == "game_snapshot" then return {variant = variant, revision = gameRevision} end
+            return gameRevision
+        end
+        local list = {}
+        for _, game in pairs(games) do
+            if game.variant == variant then
+                local open = not game.guest
+                if game.party then open = not game.trail and #game.party < 4 end
+                list[#list + 1] = {id = game.id, host = game.host.name, open = open,
+                    players = game.party and #game.party or nil}
+            end
+        end
+        table.sort(list, function(a, b) return a.id < b.id end)
+        local game = session.game
+        local current
+        if game and game.variant == variant then
+            current = {
+                id = game.id, host = game.host.name, guest = game.guest and game.guest.name or "",
+                mark = session == game.host and "X" or "O", board = game.board,
+                turn = game.turn, winner = game.winner, check = game.variant == "chess" and inCheck(game.board, game.turn == "X"),
+                moves = game.variant == "chess" and game.moves or nil, ply = game.ply,
+                rematchRequested = session == game.rematchRequester,
+                opponentRequested = game.rematchRequester ~= nil and session ~= game.rematchRequester
+            }
+            if variant == "battleship" then
+                current.target, current.fleet = battleshipBoards(game, current.mark)
+                current.lastShot = game.lastShot
+                current.lastShotHit = game.lastShotHit
+                current.hits = game.hits[current.mark]
+                current.sunk = game.sunk[current.mark]
+                current.ready = fleetsReady(game)
+                current.placed = #game.placements[current.mark]
+                current.nextShip = FLEET_LENGTHS[current.placed + 1] or 0
+            elseif variant == "trail" then
+                current.trail = game.trail
+                current.party = {}
+                for i, member in ipairs(game.party) do current.party[i] = member.name end
+                current.isHost = session == game.host
+                current.canMove = game.party[game.trailTurn] == session
+                current.controller = game.party[game.trailTurn] and game.party[game.trailTurn].name or ""
+                current.votes, current.voted = 0, game.trailVotes[session] == true
+                for _ in pairs(game.trailVotes) do current.votes = current.votes + 1 end
+                if game.trail then
+                    current.choices = trailChoices(game.trail)
+                    local stop = game.trail.stop or TRAIL_STOPS[game.trail.nextStop]
+                    current.destination = stop and stop[2] or "Oregon"
+                end
+            end
+        end
+        local notice = ""
+        if session.gameDeparture and session.gameDeparture.variant == variant then
+            notice = session.gameDeparture.message
+            session.gameDeparture = nil
+        end
+        if action == "game_snapshot" then
+            return {variant = variant, revision = gameRevision, matches = list, current = current, notice = notice}
+        end
+        return gameRevision, list, current or false, variant, notice
+    end
+
+    if action == "game_hint" then
+        local game = session.game
+        local mark = game and (session == game.host and "X" or "O")
+        if not game or game.variant ~= "chess" or not game.guest or game.winner ~= "" or game.turn ~= mark
+            or type(value) ~= "number" or value < 1 or value > 64 or value % 1 ~= 0 then return end
+        local hints = {}
+        for to = 1, 64 do
+            if chessMove(game, value, to, mark == "X", "q") then hints[#hints + 1] = to end
+        end
+        return game.id, game.board, hints
+    end
+
+    if action == "game_create" then
+        if session.game then return "Leave your current match first." end
+        local count = 0
+        for _ in pairs(games) do count = count + 1 end
+        if count >= 16 then return "This room already has 16 matches." end
+        gameSequence = gameSequence + 1
+        local game = {id = gameSequence, host = session, variant = variant}
+        resetGame(game)
+        if variant == "trail" then game.party, game.trailTurn, game.trailVotes = {session}, 1, {} end
+        games[game.id], session.game = game, game
+        local announcement = session.name .. " opened a " .. MULTIPLAYER_GAME_NAMES[variant]
+            .. " lobby (#" .. game.id .. ")."
+        addHistory("Games", announcement, "[Games] " .. announcement)
+    elseif action == "game_join" then
+        if session.game then return "Leave your current match first." end
+        local game = type(value) == "number" and games[value]
+        if not game or game.variant ~= variant then return "That match is no longer open." end
+        if variant == "trail" then
+            if game.trail or #game.party >= 4 then return "That expedition is no longer open." end
+            for _, member in ipairs(game.party) do
+                if member.identity == session.identity then return "You already joined this expedition." end
+            end
+            game.party[#game.party + 1], session.game = session, game
+        else
+            if game.guest then return "That match is no longer open." end
+            if game.host.identity == session.identity then return "A different player must join this match." end
+            game.guest, session.game = session, game
+        end
+    elseif action == "game_leave" then
+        if not session.game or session.game.variant ~= variant then return end
+        closeGame(session)
+        return "ok"
+    elseif action == "game_rematch" then
+        local game = session.game
+        if game and game.variant == "trail" and variant == "trail" then
+            if not game.trail or not game.trail.result then return "Finish the expedition first." end
+            game.trailVotes[session] = true
+            local all = true
+            for _, member in ipairs(game.party) do if not game.trailVotes[member] then all = false; break end end
+            if all then game.trail, game.trailTurn, game.trailVotes = newTrail(), 1, {} end
+            gameRevision = gameRevision + 1
+            return "ok"
+        end
+        if not game or game.variant ~= variant or game.winner == "" then return "Finish the match first." end
+        if not game.guest then return "Finish the match first." end
+        if game.rematchRequester == session then return "ok" end
+        if game.rematchRequester then resetGame(game)
+        else game.rematchRequester = session end
+    elseif action == "game_move" then
+        local game = session.game
+        if not game or game.variant ~= variant then return "Join a match first." end
+        if variant == "trail" then
+            if value == 10 and not game.trail and session == game.host then
+                game.trail = newTrail()
+            elseif not game.trail then return "Waiting for the host to start."
+            elseif game.trail.result then return "The expedition has ended."
+            elseif game.party[game.trailTurn] ~= session then return "Wait for your turn."
+            elseif type(value) ~= "number" or value % 1 ~= 0 or value < 1 or value > #trailChoices(game.trail) then
+                return "Choose a trail action."
+            else
+                game.trail.selected = value
+                takeTrailTurn(game.trail)
+                game.trailTurn = game.trailTurn % #game.party + 1
+            end
+            gameRevision = gameRevision + 1
+            return "ok"
+        end
+        if game.winner ~= "" then return "This match has ended." end
+        local mark = session == game.host and "X" or "O"
+        if game.variant == "battleship" and type(value) == "number" and value >= 101 and value <= 301
+            and value % 1 == 0 then
+            local result = placeShip(game, mark, value)
+            if result == "ok" then gameRevision = gameRevision + 1 end
+            return result
+        end
+        if game.variant == "battleship" and not fleetsReady(game) then return "Both players must finish placing their ships." end
+        if not game.guest then return "Waiting for another player." end
+        if game.turn ~= mark then return "Wait for your turn." end
+        if game.variant == "chess" then
+            if type(value) ~= "number" or value < 256 or value >= 16640 or value % 1 ~= 0 then return "Invalid move." end
+            local errorMessage = playChess(game, value, mark)
+            if errorMessage then return errorMessage end
+        elseif game.variant == "battleship" then
+            if type(value) ~= "number" or value < 1 or value > 100 or value % 1 ~= 0 then
+                return "Choose a square on the target grid."
+            end
+            if game.shots[mark][value] then return "You already fired at that square." end
+            local opponent = mark == "X" and "O" or "X"
+            local ship = game.fleets[opponent][value]
+            game.shots[mark][value] = ship and "H" or "M"
+            local coordinate = string.char(65 + (value - 1) % 10) .. (math.floor((value - 1) / 10) + 1)
+            game.lastShot = session.name .. (ship and " hit " or " missed at ") .. coordinate
+            game.lastShotHit = ship ~= nil
+            if ship then
+                ship.hits = ship.hits + 1
+                game.hits[mark] = game.hits[mark] + 1
+                if ship.hits == ship.length then
+                    game.sunk[mark] = game.sunk[mark] + 1
+                    game.lastShot = game.lastShot .. " and sunk " .. ship.name
+                end
+                if game.hits[mark] == FLEET_CELLS then game.winner = mark end
+            end
+        else
+            if type(value) ~= "number" or value < 1 or value > 9 or value % 1 ~= 0
+                or game.board:sub(value, value) ~= "." then return "Choose an empty square." end
+            game.board = game.board:sub(1, value - 1) .. mark .. game.board:sub(value + 1)
+            for _, line in ipairs(WIN_LINES) do
+                if game.board:sub(line[1], line[1]) == mark and game.board:sub(line[2], line[2]) == mark
+                    and game.board:sub(line[3], line[3]) == mark then
+                    game.winner = mark
+                    break
+                end
+            end
+            if game.winner == "" and not game.board:find(".", 1, true) then game.winner = "draw" end
+        end
+        game.turn = mark == "X" and "O" or "X"
+    else
+        return
+    end
+    gameRevision = gameRevision + 1
+    return "ok"
+end
+
+local function syncBoard()
+    if not boardReady or not boardDirty or not owner():isValid() then return end
+    local now = timer.curtime()
+    local byPlayer = {}
+    for sender, session in pairs(sessions) do
+        if not session.removed and now < session.expires and sender:isValid() and session.owner:isValid() then
+            local existing = byPlayer[session.owner]
+            if not existing or session.id < existing.id then byPlayer[session.owner] = session end
+        end
+    end
+    local members = {}
+    for _, session in pairs(byPlayer) do
+        members[#members + 1] = {id = session.id, name = session.name}
+    end
+    table.sort(members, function(a, b) return a.id < b.id end)
+
+    local banned = {}
+    for _, entry in pairs(bansById) do banned[#banned + 1] = entry end
+    table.sort(banned, function(a, b) return a.id < b.id end)
+    local banPages = math.max(1, math.ceil(#banned / MEMBERS_PER_PAGE))
+    banPage = math.min(banPage, banPages)
+    local banFirst = (banPage - 1) * MEMBERS_PER_PAGE + 1
+    local banLast = math.min(#banned, banFirst + MEMBERS_PER_PAGE - 1)
+
+    local bytes = 48 + #(roomName or "")
+    for _, id in ipairs(channelOrder) do bytes = bytes + #channels[id].name + 5 end
+    local count = math.min(#members, 255)
+    for i = 1, count do bytes = bytes + #members[i].name + 5 end
+    for i = banFirst, banLast do bytes = bytes + #banned[i].name + 5 end
+    if net.getBytesLeft() < bytes then return end
+    net.start("chatroom_board")
+    net.writeString(roomName or "")
+    net.writeUInt(count, 8)
+    for i = 1, count do
+        net.writeUInt(members[i].id, 32)
+        net.writeString(members[i].name)
+    end
+    net.writeUInt(#banned, 32)
+    net.writeUInt(banPage, 32)
+    net.writeUInt(banPages, 32)
+    net.writeUInt(banLast - banFirst + 1, 4)
+    for i = banFirst, banLast do
+        net.writeUInt(banned[i].id, 32)
+        net.writeString(banned[i].name)
+    end
+    net.writeUInt(#channelOrder, 4)
+    for _, id in ipairs(channelOrder) do
+        net.writeUInt(id, 32)
+        net.writeString(channels[id].name)
+    end
+    net.send(owner())
+    boardDirty = false
+end
+
+local function syncPosts()
+    if not boardReady or not postsDirty or not owner():isValid() then return end
+    local posts = channels[postsChannel].history
+    local bytes = 32
+    for _, post in ipairs(posts) do bytes = bytes + #post.author + #post.message + 2 end
+    if net.getBytesLeft() < bytes then return end
+    net.start("chatroom_board_posts")
+    net.writeUInt(postsChannel, 32)
+    net.writeUInt(#posts, 5)
+    for _, post in ipairs(posts) do
+        net.writeString(post.author)
+        net.writeString(post.message)
+    end
+    net.send(owner())
+    postsDirty = false
+end
+
+net.receive("chatroom_posts_channel", function(_, ply)
+    if ply ~= owner() then return end
+    local id = net.readUInt(32)
+    if not channels[id] then return end
+    postsChannel, postsDirty = id, true
+    syncPosts()
+end)
+
+hook.add("ClientInitialized", "chatroom_board", function(ply)
+    if ply ~= owner() then return end
+    boardReady, boardDirty = true, true
+    postsDirty = true
+    syncBoard()
+    syncPosts()
+end)
+timer.create("chatroom_board_sync", 0.5, 0, function()
+    syncBoard()
+    syncPosts()
+end)
+
+net.receive("chatroom_setup", function(_, ply)
+    if ply ~= owner() or roomName then return end
+    local name, secret = net.readString(), net.readString()
+    if #name > 28 then return end
+    name = cleanChatText(name)
+    if name == "" or name:find("[^ -~]")
+        or #secret > 64 or secret:find("[^ -~]") then return end
+    if containsSlurInName(name) then
+        if net.getBytesLeft() >= 80 then
+            net.start("chatroom_setup_blocked")
+            net.send(ply)
+        end
+        return
+    end
+    roomName, password = name, secret
+    boardReady, boardDirty = true, true
+    syncBoard()
+end)
+
+net.receive("chatroom_create_channel", function(_, ply)
+    if ply ~= owner() or not roomName or net.getBytesLeft() < 128 then return end
+    local id = net.readUInt(32)
+    local value = net.readString()
+    local name = #value <= 28 and cleanChatText(value) or ""
+    local result
+    if id == 1 then result = "General cannot be renamed."
+    elseif id ~= 0 and not channels[id] then result = "That channel no longer exists."
+    elseif name == "" or name:find("[^ -~]") then result = "Enter a channel name of up to 28 characters."
+    elseif containsSlurInName(name) then result = "Channel name blocked. Choose another name."
+    elseif id == 0 and #channelOrder >= 12 then result = "This room already has 12 channels."
+    else
+        for _, other in ipairs(channelOrder) do
+            if other ~= id and channels[other].name:lower() == name:lower() then result = "That channel name is already in use."; break end
+        end
+    end
+    local created = result == nil
+    if created then
+        if id == 0 then
+            nextChannelId = nextChannelId + 1
+            channels[nextChannelId] = {name = name, history = {}, sequence = 0}
+            channelOrder[#channelOrder + 1] = nextChannelId
+            result = "Channel created."
+        else
+            channels[id].name = name
+            result = "Channel renamed."
+        end
+        boardDirty = true
+    end
+    net.start("chatroom_channel_result")
+    net.writeBool(created)
+    net.writeString(result)
+    net.send(ply)
+end)
+
+net.receive("chatroom_delete_channel", function(_, ply)
+    if ply ~= owner() then return end
+    local id = net.readUInt(32)
+    if id == 1 or not channels[id] then return end
+    channels[id] = nil
+    for i, existing in ipairs(channelOrder) do
+        if existing == id then table.remove(channelOrder, i); break end
+    end
+    for _, session in pairs(sessions) do
+        if session.channel == id then session.channel = 1 end
+    end
+    if postsChannel == id then postsChannel, postsDirty = 1, true end
+    boardDirty = true
+end)
+
+timer.create("expire_chat_sessions", 1, 0, function()
+    local now = timer.curtime()
+    for sender, session in pairs(sessions) do
+        if not sender:isValid() or not session.owner:isValid() or now >= session.expires then
+            closeGame(session)
+            sessions[sender] = nil
+            boardDirty = true
+        end
+    end
+end)
+
+hook.add("PlayerDisconnected", "clear_chat_cooldown", function(ply)
+    lastPost[ply] = nil
+    filterStrikes[ply] = nil
+    nextJoin[ply] = nil
+    for sender, session in pairs(sessions) do
+        if session.owner == ply then
+            closeGame(session)
+            sessions[sender] = nil
+            boardDirty = true
+        end
+    end
+end)
+
+net.receive("chatroom_ban_page", function(_, ply)
+    if ply ~= owner() then return end
+    banPage = math.max(1, net.readUInt(32))
+    boardDirty = true
+    syncBoard()
+end)
+
+local function removePlayerFromRoom(target, removal, now)
+    for _, session in pairs(sessions) do
+        if session.identity == target.identity then
+            closeGame(session)
+            session.removed = removal
+            session.expires = now + 15
+        end
+    end
+    local message = target.name .. " was " .. (removal == "banned" and "banned" or "kicked")
+    addHistory("Moderation", message, "[Alert] " .. message, true)
+    syncBoard()
+end
+
+net.receive("chatroom_moderate", function(_, ply)
+    if ply ~= owner() then return end
+    local action = net.readUInt(2)
+    local id = net.readUInt(32)
+    if action == 2 then
+        local entry = bansById[id]
+        if not entry then return end
+        bans[entry.identity], bansById[id] = nil, nil
+        boardDirty = true
+        syncBoard()
+        return
+    end
+    if action ~= 0 and action ~= 1 then return end
+
+    local now = timer.curtime()
+    local target
+    for sender, session in pairs(sessions) do
+        if session.id == id and not session.removed and now < session.expires and sender:isValid() then
+            target = session
+            break
+        end
+    end
+    if not target or not target.owner:isValid() then return end
+    local removal = action == 1 and "banned" or "kicked"
+    if action == 1 then
+        local entry = {id = id, identity = target.identity, name = target.name}
+        bans[target.identity], bansById[id] = entry, entry
+    end
+    removePlayerFromRoom(target, removal, now)
+end)
+
+hook.add("remote", "chatroom", function(sender, senderOwner, protocol, network, action, value, extra)
+    if protocol ~= PROTOCOL or not roomName or type(action) ~= "string" then return end
+    if action == "probe" then return roomName, NETWORK, password ~= "", CHIP_VERSION end
+    if network ~= NETWORK then return end
+
+    -- Discovery advertises only public room metadata.
+    if action == "discover_index" then
+        return chip():entIndex(), roomName, password ~= "", CHIP_VERSION
+    end
+    if action == "discover" then
+        return chip(), roomName, password ~= "", CHIP_VERSION
+    end
+
+    if type(senderOwner) ~= "Player" or not senderOwner:isValid() then return end
+
+    local now = timer.curtime()
+    if action == "join" then
+        local identity = playerIdentity(senderOwner)
+        if bans[identity] then return "You are banned from this chatroom." end
+        if now < (nextJoin[senderOwner] or 0) then
+            return "Wait a second before trying again."
+        end
+        nextJoin[senderOwner] = now + 1
+        if password ~= "" and (type(value) ~= "string" or #value > 64 or value ~= password) then
+            return "Incorrect password."
+        end
+        local name = extra
+        if name == nil then name = "Computer-" .. sender:entIndex() end
+        if type(name) ~= "string" or #name > 24 or not name:match("^[A-Za-z0-9_-]+$") then
+            return "Invalid computer name."
+        end
+        if containsSlurInName(name) then return "Computer name blocked. Choose another in Settings." end
+        local nameKey = name:lower()
+        if findComputer(nameKey, now, sender) then return "That computer name is already in use." end
+        closeGame(sessions[sender])
+        sessionSequence = sessionSequence + 1
+        sessions[sender] = {
+            owner = senderOwner, identity = identity, expires = now + 15, id = sessionSequence,
+            name = name, nameKey = nameKey, privateMessages = {}, privateRevision = 0, channel = 1
+        }
+        boardDirty = true
+        return "ok"
+    end
+
+    local session = sessions[sender]
+    if not session or session.owner ~= senderOwner or now >= session.expires then return end
+    if session.removed then
+        if action == "read" then return session.removed end
+        return
+    end
+    if action == "leave" then
+        closeGame(session)
+        sessions[sender] = nil
+        boardDirty = true
+        return
+    end
+    session.expires = now + 15
+    if action == "rename" then
+        if type(value) ~= "string" or #value > 24 or not value:match("^[A-Za-z0-9_-]+$") then
+            return "Invalid computer name."
+        end
+        if containsSlurInName(value) then return "Computer name blocked. Choose another in Settings." end
+        local nameKey = value:lower()
+        if findComputer(nameKey, now, sender) then return "That computer name is already in use." end
+        session.name, session.nameKey = value, nameKey
+        boardDirty = true
+        gameRevision = gameRevision + 1
+        return "ok"
+    end
+    if action == "channel_directory" then
+        local names = {}
+        for i, id in ipairs(channelOrder) do names[i] = id .. ":" .. channels[id].name end
+        return table.concat(names, "\n")
+    end
+    if action == "channel_join" and type(value) == "number" then
+        if not channels[value] then return "That channel does not exist." end
+        session.channel = value
+        return "ok"
+    end
+    if action == "private_state" then return privateState(session, now) end
+    if action == "private_snapshot" then
+        local state = privateState(session, now)
+        local lines = {"PM1", tostring(state.revision), tostring(#state.recipients)}
+        for _, entry in ipairs(state.recipients) do
+            lines[#lines + 1] = entry.id .. ":" .. entry.name
+        end
+        for _, message in ipairs(state.messages) do lines[#lines + 1] = message end
+        return table.concat(lines, "\n")
+    end
+    if action == "payment_list" then return paymentRecipients(senderOwner, now) end
+    if action == "payment_target" and type(value) == "number" then
+        local recipient, name, playerName = paymentRecipients(senderOwner, now, value)
+        return recipient, name, playerName
+    end
+    if action == "payment_request" and type(value) == "number" then
+        if type(extra) ~= "number" or extra < 1 or extra > 999999999 or extra % 1 ~= 0 then
+            return "Enter a positive whole-dollar amount."
+        end
+        local recipient, _, _, processor = paymentRecipients(senderOwner, now, value)
+        if not recipient then return "Recipient unavailable. No payment was requested." end
+        if value == 0 then return requestPaymentFrom(senderOwner, extra) end
+        local ok, results = pcall(hook.runRemote, processor, PROTOCOL, NETWORK, "payment_receive_request", senderOwner, extra)
+        local reply = ok and results[1]
+        return reply and type(reply[1]) == "string" and reply[1] or "The recipient's computer could not open a payment prompt."
+    end
+    if action == "trail_snapshot" and json then
+        return json.encode(gameAction(session, "game_snapshot", value, "trail"))
+    end
+    if action:sub(1, 5) == "game_" then return gameAction(session, action, value, extra) end
+
+    if action == "read" and type(value) == "number" then
+        local channel = channels[session.channel]
+        local unread, alerts = {}, {}
+        for _, message in ipairs(channel.history) do
+            if message.id > value then
+                unread[#unread + 1] = message.line
+                if message.alert then alerts[#unread] = true end
+            end
+        end
+        return roomName, channel.sequence, unread, alerts, channel.name, session.channel
+    end
+
+    if (action ~= "post" and action ~= "private_send") or type(value) ~= "string" then return end
+    if #value > 160 then return "Use 1 to 160 bytes of text." end
+    local message = cleanChatText(value)
+    if message == "" then
+        return "Use 1 to 160 bytes of text."
+    end
+    if containsSlur(message) then
+        local identity = session.identity
+        local strikes = (filterStrikes[identity] or 0) + 1
+        if strikes >= 3 then
+            filterStrikes[identity] = nil
+            removePlayerFromRoom(session, "filter_kicked", now)
+        else
+            filterStrikes[identity] = strikes
+        end
+        return "your message was blocked"
+    end
+
+    if now < (lastPost[senderOwner] or 0) then
+        return "Wait a second before posting again."
+    end
+    lastPost[senderOwner] = now + 1
+
+    local name = session.name
+    if action == "private_send" then
+        for peer, recipient in pairs(sessions) do
+            if recipient.id == extra and recipient.identity ~= session.identity and not recipient.removed
+                and now < recipient.expires and peer:isValid() and recipient.owner:isValid() then
+                appendPrivate(session, "To " .. recipient.name .. ": " .. message)
+                appendPrivate(recipient, "From " .. name .. ": " .. message)
+                return "ok"
+            end
+        end
+        return "That computer is no longer connected."
+    end
+    addHistory(name, message, name .. ": " .. message, nil, session.channel)
+    return "ok"
+end)
+return
+end
+
+local isOwner = player() == owner()
+local roomName = ""
+local setupName, setupPassword = "", ""
+local editingPassword, shifted = false, false
+local setupStatus = ""
+local setupWaiting
+local creatingChannel = false
+local channelNames = {"General"}
+local channelIds = {1}
+local editingChannelId = 0
+local confirmingChannel
+
+local function channelIndex(id)
+    for i, value in ipairs(channelIds) do if value == id then return i end end
+    return 1
+end
+local normalKeys = {
+    "1234567890-=",
+    "qwertyuiop[]",
+    "asdfghjkl;'",
+    "zxcvbnm,./" .. string.char(96, 92)
+}
+local shiftedKeys = {
+    "!@#$%^&*()_+",
+    "QWERTYUIOP{}",
+    'ASDFGHJKL:"',
+    "ZXCVBNM<>?~|"
+}
+local posts = {}
+local postHeight = 0
+local postScroll = 0
+local postsChannel = 1
+local members = {}
+local banned = {}
+local bannedCount, bannedPage, bannedPages = 0, 1, 1
+local tab = "connected"
+local memberPage = 1
+local selectedMember
+local selectedAction
+local titleFont = render.createFont("Roboto", 30, 700)
+local authorFont = render.createFont("Roboto", 19, 700)
+local bodyFont = render.createFont("Courier New", 17, 500)
+local postFont = render.createFont("Segoe UI Emoji", 18, 500)
+local background = Color(13, 20, 30)
+local panel = Color(23, 34, 48)
+local ink = Color(236, 244, 252)
+local muted = Color(155, 176, 198)
+local accent = Color(102, 222, 189)
+local danger = Color(255, 163, 153)
+
+local function wrapText(value, width, face)
+    render.setFont(face)
+    local lines, starts = {}, {}
+    for offset in value:gmatch("()[^\128-\191][\128-\191]*") do
+        starts[#starts + 1] = offset
+    end
+    local count = #starts
+    starts[count + 1] = #value + 1
+    local first = 1
+    while first <= count do
+        local low, high = first, count
+        while low <= high do
+            local middle = math.floor((low + high) / 2)
+            local candidate = value:sub(starts[first], starts[middle + 1] - 1)
+            if render.getTextSize(candidate) <= width then
+                low = middle + 1
+            else
+                high = middle - 1
+            end
+        end
+        local last = math.max(first, high)
+        if last < count then
+            for i = last, first + 1, -1 do
+                if value:sub(starts[i], starts[i]) == " " then
+                    last = i
+                    break
+                end
+            end
+        end
+        lines[#lines + 1] = value:sub(starts[first], starts[last + 1] - 1)
+        first = last + 1
+    end
+    return lines
+end
+
+local function preview(value, limit)
+    local characters = {}
+    for character in value:gmatch("[^\128-\191][\128-\191]*") do
+        if #characters == limit then return table.concat(characters) .. "..." end
+        characters[#characters + 1] = character
+    end
+    return table.concat(characters)
+end
+
+local function editSetupKey(key)
+    local value = editingPassword and setupPassword or setupName
+    local limit = editingPassword and 64 or 28
+    if key == "Backspace" then
+        value = value:sub(1, -2)
+    elseif #value < limit then
+        value = value .. key
+    end
+    if editingPassword then setupPassword = value else setupName = value end
+    setupStatus = ""
+end
+
+local function useSetup(x, y)
+    if setupWaiting and timer.curtime() < setupWaiting then return end
+    if y >= 202 and y < 378 then
+        local row = math.floor((y - 202) / 44) + 1
+        local column = math.floor((x - 16) / 40) + 1
+        local keys = (shifted and shiftedKeys or normalKeys)[row]
+        if column <= #keys and (x - 16) % 40 < 36 and (y - 202) % 44 < 38 then
+            editSetupKey(keys:sub(column, column))
+        end
+    elseif y >= 383 and y < 424 then
+        if x < 130 then
+            shifted = not shifted
+        elseif x < 360 then
+            editSetupKey(" ")
+        else
+            editSetupKey("Backspace")
+        end
+    elseif y >= 439 and y < 480 then
+        if creatingChannel then
+            if x < 150 then
+                creatingChannel, setupWaiting, setupStatus = false, nil, ""
+            elseif x >= 325 and setupName:find("%S") and net.getBytesLeft() >= 80 then
+                setupWaiting = timer.curtime() + 5
+                net.start("chatroom_create_channel")
+                net.writeUInt(editingChannelId, 32)
+                net.writeString(setupName)
+                net.send()
+            end
+            return
+        end
+        if editingPassword and x < 150 then
+            editingPassword, setupStatus = false, ""
+        elseif x >= 325 then
+            if not setupName:find("%S") then
+                setupStatus = "Enter a room name first."
+            elseif not editingPassword then
+                editingPassword, shifted, setupStatus = true, false, ""
+            elseif net.getBytesLeft() >= #setupName + #setupPassword + 32 then
+                setupWaiting = timer.curtime() + 5
+                setupStatus = "Starting room..."
+                net.start("chatroom_setup")
+                net.writeString(setupName)
+                net.writeString(setupPassword)
+                net.send()
+            else
+                setupStatus = "Connection busy. Try again shortly."
+            end
+        end
+    end
+end
+
+local function postSlider()
+    local viewport = POSTS_BOTTOM - POSTS_TOP
+    local maximum = math.max(0, postHeight - viewport)
+    local thumb = maximum > 0 and math.max(24, viewport * viewport / postHeight) or viewport
+    return maximum, thumb, viewport - thumb
+end
+
+if isOwner then
+    net.receive("chatroom_channel_result", function()
+        local created = net.readBool()
+        setupStatus = net.readString()
+        setupWaiting = nil
+        if created then creatingChannel, setupName = false, "" end
+    end)
+    net.receive("chatroom_setup_blocked", function()
+        if roomName ~= "" then return end
+        setupWaiting, editingPassword = nil, false
+        setupStatus = "Room name blocked. Choose another name."
+    end)
+
+    net.receive("chatroom_board_posts", function()
+        local id = net.readUInt(32)
+        if id ~= postsChannel then postScroll = 0 end
+        postsChannel = id
+        posts = {}
+        postHeight = 0
+        for i = 1, net.readUInt(5) do
+            local author, message = net.readString(), net.readString()
+            local authorLines = wrapText(author, 428, authorFont)
+            local messageLines = wrapText(message, 428, postFont)
+            local height = 11 + #authorLines * 22 + #messageLines * 19
+            posts[i] = {author = authorLines, message = messageLines, height = height}
+            postHeight = postHeight + height + 6
+        end
+        postHeight = math.max(0, postHeight - 6)
+        local maximum = postSlider()
+        postScroll = math.min(postScroll, maximum)
+    end)
+
+    net.receive("chatroom_board", function()
+        roomName = net.readString()
+        if roomName ~= "" and not creatingChannel then
+            setupName, setupPassword, setupWaiting = "", "", nil
+        end
+        members = {}
+        for i = 1, net.readUInt(8) do
+            local id, name = net.readUInt(32), net.readString()
+            members[i] = {id = id, name = name}
+        end
+        bannedCount, bannedPage, bannedPages = net.readUInt(32), net.readUInt(32), net.readUInt(32)
+        banned = {}
+        for i = 1, net.readUInt(4) do
+            banned[i] = {id = net.readUInt(32), name = net.readString()}
+        end
+        channelNames, channelIds = {}, {}
+        for i = 1, net.readUInt(4) do
+            channelIds[i], channelNames[i] = net.readUInt(32), net.readString()
+        end
+        local selectionPresent = false
+        for _, entry in ipairs(tab == "banned" and banned or members) do
+            if entry.id == selectedMember then selectionPresent = true end
+        end
+        if not selectionPresent then selectedMember = nil end
+        memberPage = math.min(memberPage, math.max(1, math.ceil(#members / MEMBERS_PER_PAGE)))
+    end)
+
+    hook.add("StarfallUsed", "chatroom_board_controls", function(user, screen)
+        if user ~= player() or not screen or not screen:isValid()
+            or screen:getClass() ~= "starfall_screen" then return end
+        local x, y = render.cursorPos(user, screen)
+        if not x or not y or x < 16 or x >= 496 then return end
+        if roomName == "" or creatingChannel then
+            useSetup(x, y)
+            return
+        end
+        if y >= 83 and y < 118 then
+            if x < 136 then tab = "connected"
+            elseif x < 256 then tab = "banned"
+            elseif x < 376 then tab = "posts"
+            else tab = "channels" end
+            selectedMember = nil
+            confirmingChannel = nil
+            return
+        end
+        if tab == "channels" then
+            if y >= 451 and y < 487 and #channelNames < 12 then
+                creatingChannel, editingPassword, shifted = true, false, false
+                setupName, setupStatus, editingChannelId, confirmingChannel = "", "", 0, nil
+            elseif y >= 132 and y < 132 + #channelNames * 25 then
+                local index = math.floor((y - 132) / 25) + 1
+                local id = channelIds[index]
+                if id ~= 1 and x >= 310 and x < 405 then
+                    creatingChannel, editingPassword, shifted = true, false, false
+                    setupName, setupStatus, editingChannelId, confirmingChannel = channelNames[index], "", id, nil
+                elseif id ~= 1 and x >= 405 then
+                    if confirmingChannel == id and net.getBytesLeft() >= 48 then
+                        net.start("chatroom_delete_channel")
+                        net.writeUInt(id, 32)
+                        net.send()
+                        confirmingChannel = nil
+                    else
+                        confirmingChannel = id
+                    end
+                else confirmingChannel = nil end
+            end
+            return
+        end
+        if tab == "posts" then
+            if y >= 121 and y < 153 and net.getBytesLeft() >= 48 then
+                local index = channelIndex(postsChannel)
+                if x < 110 then index = math.max(1, index - 1)
+                elseif x >= 402 then index = math.min(#channelNames, index + 1) end
+                local id = channelIds[index]
+                if id ~= postsChannel then
+                    net.start("chatroom_posts_channel")
+                    net.writeUInt(id, 32)
+                    net.send()
+                end
+                return
+            end
+            if x >= POSTS_TRACK_X and y >= POSTS_TOP and y < POSTS_BOTTOM then
+                local maximum, thumb, travel = postSlider()
+                if maximum > 0 then
+                    local position = (y - POSTS_TOP - thumb / 2) / travel
+                    postScroll = math.floor(math.max(0, math.min(1, position)) * maximum + 0.5)
+                end
+            end
+            return
+        end
+        local viewingBans = tab == "banned"
+        if y >= 468 and y < 504 then
+            local page = viewingBans and bannedPage or memberPage
+            local pages = viewingBans and bannedPages or math.max(1, math.ceil(#members / MEMBERS_PER_PAGE))
+            local newPage = page
+            if x < 120 then newPage = math.max(1, page - 1) end
+            if x >= 392 then newPage = math.min(pages, page + 1) end
+            if viewingBans then
+                if newPage ~= page and net.getBytesLeft() >= 40 then
+                    net.start("chatroom_ban_page")
+                    net.writeUInt(newPage, 32)
+                    net.send()
+                end
+            else
+                memberPage = newPage
+            end
+            selectedMember = nil
+            return
+        end
+        local row = math.floor((y - MEMBER_TOP) / MEMBER_HEIGHT)
+        if row < 0 or row >= MEMBERS_PER_PAGE
+            or (y - MEMBER_TOP) % MEMBER_HEIGHT >= MEMBER_HEIGHT - 4 then return end
+        local entry, action
+        if viewingBans then
+            if x < 390 then return end
+            entry, action = banned[row + 1], 2
+        else
+            if x < 300 then return end
+            entry = members[(memberPage - 1) * MEMBERS_PER_PAGE + row + 1]
+            action = x < 395 and 0 or 1
+        end
+        if not entry then return end
+        if selectedMember ~= entry.id or selectedAction ~= action then
+            selectedMember, selectedAction = entry.id, action
+            return
+        end
+        if net.getBytesLeft() < 40 then return end
+        net.start("chatroom_moderate")
+        net.writeUInt(action, 2)
+        net.writeUInt(entry.id, 32)
+        net.send()
+        selectedMember = nil
+    end)
+end
+
+local function label(x, y, value, color, font)
+    render.setColor(color)
+    render.setFont(font)
+    render.drawText(x, y, value)
+end
+
+local function setupButton(x, y, width, height, text, active)
+    render.setColor(panel)
+    render.drawRect(x, y, width, height)
+    label(x + 9, y + 9, text, active and accent or ink, bodyFont)
+end
+
+local function renderSetup()
+    label(22, 47, creatingChannel and (editingChannelId == 0 and "Create a channel" or "Rename channel")
+        or (editingPassword and "Step 2 of 2  |  Room password" or "Step 1 of 2  |  Room name"), muted, bodyFont)
+    label(22, 91, creatingChannel and "Enter a name of up to 28 characters."
+        or (editingPassword and "Leave blank to make the room open." or "Use up to 28 characters for the room name."), ink, bodyFont)
+    render.setColor(panel)
+    render.drawRect(16, 126, 480, 52)
+    local value = setupName
+    if editingPassword then
+        value = setupPassword == "" and "(open room)" or string.rep("*", math.min(#setupPassword, 40))
+    end
+    label(26, 143, value .. "_", accent, bodyFont)
+    local keys = shifted and shiftedKeys or normalKeys
+    for row, line in ipairs(keys) do
+        for column = 1, #line do
+            setupButton(16 + (column - 1) * 40, 202 + (row - 1) * 44, 36, 38, line:sub(column, column))
+        end
+    end
+    setupButton(16, 383, 110, 41, "Shift", shifted)
+    setupButton(132, 383, 224, 41, "Space")
+    setupButton(362, 383, 134, 41, "Backspace")
+    if editingPassword or creatingChannel then setupButton(16, 439, 130, 41, "Back") end
+    setupButton(325, 439, 171, 41, creatingChannel and (editingChannelId == 0 and "Create channel" or "Save name")
+        or (editingPassword and "Start room" or "Next"), true)
+    local hint = setupStatus
+    if setupWaiting and timer.curtime() >= setupWaiting then hint = "Start not confirmed. Try again." end
+    label(22, 488, hint ~= "" and hint or "Aim at a key and press E.", muted, bodyFont)
+end
+
+hook.add("render", "chatroom_board", function()
+    render.clear(background)
+    render.setColor(panel)
+    render.drawRect(0, 0, 512, 76)
+    label(22, 10, roomName == "" and "Server setup" or preview(roomName, 24), ink, titleFont)
+    if not isOwner then
+        label(22, 47, "Server v" .. CHIP_VERSION, muted, bodyFont)
+        label(22, 94, "Only the server owner can view this board.", muted, bodyFont)
+        return
+    end
+    if roomName == "" or creatingChannel then
+        renderSetup()
+        return
+    end
+    label(22, 47, "Server v" .. CHIP_VERSION, muted, bodyFont)
+    render.setColor(panel)
+    for i = 0, 3 do render.drawRect(16 + i * 120, 83, 116, 35) end
+    label(22, 90, "Players (" .. #members .. ")", tab == "connected" and accent or ink, authorFont)
+    label(142, 90, "Bans (" .. bannedCount .. ")", tab == "banned" and accent or ink, authorFont)
+    label(262, 90, "Posts", tab == "posts" and accent or ink, authorFont)
+    label(382, 90, "Channels", tab == "channels" and accent or ink, authorFont)
+    if tab == "channels" then
+        for i, name in ipairs(channelNames) do
+            local y = 132 + (i - 1) * 25
+            label(26, y, "# " .. preview(name, 24), ink, bodyFont)
+            if channelIds[i] ~= 1 then
+                label(313, y, "Rename", accent, bodyFont)
+                label(409, y, confirmingChannel == channelIds[i] and "Confirm" or "Delete", danger, bodyFont)
+            end
+        end
+        if #channelNames < 12 then setupButton(16, 451, 220, 36, "Add channel", true) end
+        label(26, 492, confirmingChannel and "Confirm deletes the channel and its posts."
+            or (setupStatus ~= "" and setupStatus or "Aim at a channel action and press E."), muted, bodyFont)
+        return
+    end
+    if tab ~= "posts" then
+        local viewingBans = tab == "banned"
+        local entries = viewingBans and banned or members
+        if #entries == 0 then
+            label(22, MEMBER_TOP, viewingBans and "No banned players." or "No players connected.", muted, bodyFont)
+        end
+        local first = viewingBans and 1 or (memberPage - 1) * MEMBERS_PER_PAGE + 1
+        for i = first, math.min(#entries, first + MEMBERS_PER_PAGE - 1) do
+            local entry = entries[i]
+            local y = MEMBER_TOP + (i - first) * MEMBER_HEIGHT
+            render.setColor(panel)
+            render.drawRect(16, y, 480, MEMBER_HEIGHT - 4)
+            label(27, y + 8, preview(entry.name, viewingBans and 32 or 24), ink, bodyFont)
+            local confirming = selectedMember == entry.id
+            if viewingBans then
+                label(401, y + 7, confirming and "Confirm" or "Unban", accent, authorFont)
+            else
+                label(309, y + 7, confirming and selectedAction == 0 and "Confirm" or "Kick", danger, authorFont)
+                label(402, y + 7, confirming and selectedAction == 1 and "Confirm" or "Ban", danger, authorFont)
+            end
+        end
+        local page = viewingBans and bannedPage or memberPage
+        local pages = viewingBans and bannedPages or math.max(1, math.ceil(#members / MEMBERS_PER_PAGE))
+        if page > 1 then label(22, 480, "< Previous", accent, bodyFont) end
+        if page < pages then label(405, 480, "Next >", accent, bodyFont) end
+        label(134, 480, selectedMember and "Press E again to confirm" or "Aim and press E to use", muted, bodyFont)
+        return
+    end
+    local index = channelIndex(postsChannel)
+    label(22, 130, "< Prev", index > 1 and accent or muted, bodyFont)
+    label(119, 130, "# " .. (channelNames[index] or "General"), ink, bodyFont)
+    label(420, 130, "Next >", index < #channelNames and accent or muted, bodyFont)
+    if #posts == 0 then label(22, POSTS_TOP, "No messages yet.", muted, bodyFont) end
+    local maximum, thumb, travel = postSlider()
+    local y = POSTS_TOP - postScroll
+    for i = 1, #posts do
+        local post = posts[#posts - i + 1]
+        if y >= POSTS_BOTTOM then break end
+        if y + post.height > POSTS_TOP then
+            local top = math.max(y, POSTS_TOP)
+            render.setColor(panel)
+            render.drawRect(16, top, 450, math.min(y + post.height, POSTS_BOTTOM) - top)
+            for j, line in ipairs(post.author) do
+                local lineY = y + 5 + (j - 1) * 22
+                if lineY >= POSTS_TOP and lineY + 22 <= POSTS_BOTTOM then
+                    label(27, lineY, line, accent, authorFont)
+                end
+            end
+            for j, line in ipairs(post.message) do
+                local lineY = y + 5 + #post.author * 22 + (j - 1) * 19
+                if lineY >= POSTS_TOP and lineY + 19 <= POSTS_BOTTOM then
+                    label(27, lineY, line, ink, postFont)
+                end
+            end
+        end
+        y = y + post.height + 6
+    end
+    if maximum > 0 then
+        render.setColor(panel)
+        render.drawRect(POSTS_TRACK_X, POSTS_TOP, 23, POSTS_BOTTOM - POSTS_TOP)
+        render.setColor(accent)
+        render.drawRect(POSTS_TRACK_X + 4, POSTS_TOP + travel * postScroll / maximum, 15, thumb)
+        label(22, 489, "Aim at the scrollbar and press E.", muted, bodyFont)
+    end
+end)

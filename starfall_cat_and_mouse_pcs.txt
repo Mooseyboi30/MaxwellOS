@@ -1,0 +1,95 @@
+--@name Cat and Mouse PCs | MaxwellOS
+--@author v27.3
+--@shared
+
+local SITE_NAME = "Cat and Mouse PCs"
+local PAGE_TITLE = "MaxwellOS"
+local SITE_FONT = {"Roboto", 22, 500}
+local PAGE_LINES = {
+    "The Starfall computer from Cat and Mouse PCs",
+    "Desktop with Apps and Games tabs",
+    "Chatrooms and live Starfall websites",
+    "Calculator, Minesweeper, and room games",
+    "Color presets and Wiremod power controls"
+}
+
+local BUY_PROMPT = "Contact Cat and Mouse PCs to buy MaxwellOS."
+local PAGE_OPTIONS = {640, 22, 555, 468, 50, BUY_PROMPT}
+
+local frame = {
+    {"rect", 0, 0, 512, 512, 15, 22, 34},
+    {"rect", 0, 0, 512, 63, 24, 37, 54},
+    {"rect", 22, 18, 5, 27, 103, 226, 190},
+    {"text", 38, 18, 450, 30, 233, 244, 251, SITE_NAME},
+    {"rect", 22, 82, 468, 113, 31, 53, 73},
+    {"rect", 22, 82, 468, 4, 103, 226, 190},
+    {"text", 40, 105, 426, 32, 103, 226, 190, PAGE_TITLE},
+    {"text", 40, 146, 426, 28, 233, 244, 251, "Your Starfall desktop"}
+}
+
+local function feature(y, title, description)
+    frame[#frame + 1] = {"rect", 22, y, 468, 60, 24, 37, 54}
+    frame[#frame + 1] = {"text", 38, y + 4, 434, 25, 103, 226, 190, title}
+    frame[#frame + 1] = {"text", 38, y + 29, 434, 25, 213, 229, 242, description}
+end
+
+feature(207, "Chatrooms", "Channels, private messages, and emoji")
+feature(277, "Website Viewer", "Discover Starfall sites with live graphics")
+feature(347, "Apps and games", "Calculator, Minesweeper, Chess, and more")
+feature(417, "Make it yours", "Color presets, name, and Wiremod power")
+
+frame[#frame + 1] = {"rect", 0, 512, 512, 128, 15, 22, 34}
+frame[#frame + 1] = {"text", 38, 515, 434, 27, 213, 229, 242, "Get MaxwellOS from Cat and Mouse PCs"}
+frame[#frame + 1] = {"rect", 22, 555, 468, 50, 42, 118, 106}
+frame[#frame + 1] = {"text", 38, 568, 434, 27, 246, 255, 253, "BUY NOW"}
+
+if SERVER then
+    hook.add("remote", "maxwellos_website", function(_, _, protocol)
+        if protocol == "starfall_website_discover_v1" then
+            return chip():entIndex(), SITE_NAME
+        elseif protocol == "starfall_website_page_v1" then
+            return chip():entIndex(), SITE_NAME, PAGE_TITLE, PAGE_LINES, false, SITE_FONT, false, false, PAGE_OPTIONS
+        elseif protocol == "starfall_website_screen_v1" then
+            return frame
+        end
+    end)
+else
+    local font = render.createFont(unpack(SITE_FONT))
+    hook.add("remote", "maxwellos_website_frame", function(_, _, protocol)
+        if protocol == "starfall_website_screen_v1" then return frame end
+    end)
+    local scroll, message = 0, ""
+    hook.add("StarfallUsed", "maxwellos_website_controls", function(user, screen)
+        if user ~= player() or not screen or not screen:isValid() or screen:getClass() ~= "starfall_screen" then return end
+        local x, y = render.cursorPos(user, screen)
+        if not x or not y then return end
+        if y >= 478 then
+            scroll = math.max(0, math.min(PAGE_OPTIONS[1] - 478, scroll + (x < 256 and -96 or 96)))
+            message = ""
+        elseif x >= 22 and x < 490 and y + scroll >= 555 and y + scroll < 605 then
+            message = BUY_PROMPT
+        end
+    end)
+    hook.add("render", "maxwellos_website_screen", function()
+        render.setFont(font)
+        for _, command in ipairs(frame) do
+            local kind, x, y, w, h, r, g, b, value = unpack(command)
+            y = y - scroll
+            render.setColor(Color(r, g, b))
+            if kind == "rect" then
+                local first, last = math.max(0, y), math.min(478, y + h)
+                if last > first then render.drawRect(x, first, w, last - first) end
+            elseif y >= 0 and y + h <= 478 then
+                render.drawText(x, y, value)
+            end
+        end
+        render.setColor(Color(24, 37, 54))
+        render.drawRect(0, 478, 512, 34)
+        render.setColor(Color(233, 244, 251))
+        if message ~= "" then render.drawText(20, 483, message)
+        else
+            render.drawText(20, 483, "Scroll up")
+            render.drawText(272, 483, "Scroll down")
+        end
+    end)
+end

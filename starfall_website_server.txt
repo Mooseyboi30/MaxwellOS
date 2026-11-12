@@ -1,0 +1,85 @@
+--@name Starfall Website Server
+--@author v27.3
+--@shared
+
+-- Edit these fields, then upload the chip again to publish the page.
+-- Use printable ASCII. The viewer shows up to five body lines.
+-- Set this to false if you replace buildFrame with custom graphics.
+local USE_DEMO_TIMELINE = true
+local SITE_FONT = {"Roboto", 25, 500} -- Family, size, weight
+local SITE_NAME = "My Starfall Site" -- Up to 32 characters
+local PAGE_TITLE = "Welcome" -- Up to 26 characters
+local PAGE_LINES = { -- Up to 42 characters per line
+    "This page runs on a Starfall website chip.",
+    "Open Apps > Website Viewer to find it.",
+    "Edit PAGE_LINES to publish your own page."
+}
+
+local function clean(value, limit)
+    return (value:sub(1, limit):gsub("[^ -~]", " "))
+end
+
+SITE_NAME = clean(SITE_NAME, 32)
+PAGE_TITLE = clean(PAGE_TITLE, 26)
+local lines = {}
+for i = 1, math.min(#PAGE_LINES, 5) do lines[i] = clean(PAGE_LINES[i], 42) end
+
+-- Both displays use this 512 x 512 scene. Add rectangles or text here.
+-- Commands are kind, x, y, width, height, red, green, blue, optional text.
+local startedAt = timer.curtime()
+
+local function buildFrame()
+    local now = math.max(0, timer.curtime() - startedAt)
+    local progress = (now % 4) / 4
+    local frame = {
+        {"rect", 0, 0, 512, 512, 19, 27, 42},
+        {"rect", 0, 0, 512, 82, 33, 54, 77},
+        {"text", 24, 24, 464, 36, 234, 245, 255, PAGE_TITLE},
+        {"rect", 24, 330, 464, 102, 33, 54, 77},
+        {"rect", 40, 391, 432, 15, 19, 27, 42},
+        {"rect", 40, 391, 432 * progress, 15, 56, 200, 223},
+        {"rect", 40 + 400 * progress, 372, 32, 12, 255, 187, 98},
+        {"text", 40, 340, 432, 30, 198, 222, 239, "Live animation"},
+        {"text", 24, 462, 464, 32, 198, 222, 239, "Uptime: " .. math.floor(now) .. "s"}
+    }
+    for i, line in ipairs(lines) do
+        frame[#frame + 1] = {"text", 24, 105 + (i - 1) * 40, 464, 36, 198, 222, 239, line}
+    end
+    return frame
+end
+
+if SERVER then
+    hook.add("ClientInitialized", "starfall_website_uptime", function(ply)
+        if net.getBytesLeft() < 32 then return end
+        net.start("starfall_website_uptime")
+        net.writeFloat(startedAt)
+        net.send(ply)
+    end)
+    hook.add("remote", "starfall_website", function(_, _, protocol)
+        if protocol == "starfall_website_screen_v1" then return buildFrame() end
+        if protocol == "starfall_website_discover_v1" then return chip():entIndex(), SITE_NAME end
+        if protocol == "starfall_website_page_v1" then
+            return chip():entIndex(), SITE_NAME, PAGE_TITLE, lines, USE_DEMO_TIMELINE and "demo_timeline_v1", SITE_FONT, false, timer.curtime() - startedAt
+        end
+    end)
+else
+    net.receive("starfall_website_uptime", function() startedAt = net.readFloat() end)
+    local bodyFont = render.createFont(unpack(SITE_FONT))
+
+    hook.add("remote", "starfall_website_screen", function(_, _, protocol)
+        if protocol == "starfall_website_screen_v1" then return buildFrame() end
+    end)
+
+    hook.add("render", "starfall_website_screen", function()
+        render.setFont(bodyFont)
+        for _, command in ipairs(buildFrame()) do
+            local kind, x, y, w, h, r, g, b, value = unpack(command)
+            render.setColor(Color(r, g, b))
+            if kind == "rect" then
+                render.drawRect(x, y, w, h)
+            elseif kind == "text" then
+                render.drawText(x, y, value)
+            end
+        end
+    end)
+end

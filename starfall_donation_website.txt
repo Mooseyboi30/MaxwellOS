@@ -1,0 +1,106 @@
+--@name Starfall Donation Website
+--@author v27.3
+--@shared
+
+local SITE_FONT = {"Roboto", 25, 500} -- Family, size, weight
+local SITE_NAME = "Donation Site"
+local AMOUNTS = {100, 500, 1000} -- Three preset amounts in in-game currency
+local DESCRIPTION = "Donation to the site owner"
+
+local function buildFrame()
+    local frame = {
+        {"rect", 0, 0, 512, 512, 19, 27, 42},
+        {"rect", 0, 0, 512, 82, 33, 54, 77},
+        {"text", 24, 24, 464, 36, 234, 245, 255, SITE_NAME},
+        {"text", 48, 105, 416, 32, 198, 222, 239, "Support the site owner."},
+        {"text", 48, 401, 416, 32, 198, 222, 239, "Press E on an amount to donate."},
+        {"text", 48, 440, 416, 32, 198, 222, 239, "Confirm in the in-game payment prompt."}
+    }
+    for i, amount in ipairs(AMOUNTS) do
+        local y = 154 + (i - 1) * 74
+        frame[#frame + 1] = {"rect", 48, y, 416, 56, 29, 100, 98}
+        frame[#frame + 1] = {"text", 64, y + 14, 380, 32, 234, 245, 255, "Donate $" .. amount}
+    end
+    return frame
+end
+
+if SERVER then
+    local nextRequest = {}
+    local function requestDonation(payer, button)
+        if not payer or not payer:isValid() or not payer:isPlayer() then return "Invalid payer." end
+        if payer == owner() then return "You own this donation site." end
+        local amount = AMOUNTS[button]
+        if not amount or amount <= 0 or amount % 1 ~= 0 then return "Invalid donation amount." end
+        local now = timer.curtime()
+        local id = payer:entIndex()
+        if now < (nextRequest[id] or 0) then return "Please wait before trying again." end
+        nextRequest[id] = now + 1
+        local api = economy and economy.requestMoney and economy or (darkrp and darkrp.requestMoney and darkrp)
+        if not api then return "The in-game payment API is unavailable." end
+        local ok, result = pcall(function()
+            if api.canMakeMoneyRequest and not api.canMakeMoneyRequest(payer) then return "Payment request pending or on cooldown." end
+            if api.canAfford and not api.canAfford(payer, amount) then return "You cannot afford this donation." end
+            api.requestMoney(payer, amount, DESCRIPTION, nil, nil, nil)
+            return "Check the in-game payment prompt."
+        end)
+        return ok and result or "Could not open the payment prompt."
+    end
+
+    hook.add("remote", "donation_website", function(sender, payer, protocol, button)
+        if protocol == "starfall_website_discover_v1" then return chip():entIndex(), SITE_NAME end
+        if protocol == "starfall_website_page_v1" then
+            return chip():entIndex(), SITE_NAME, SITE_NAME, {"Support the site owner."}, "donation_buttons_v1", SITE_FONT, AMOUNTS
+        elseif protocol == "starfall_website_screen_v1" then
+            return buildFrame()
+        elseif protocol == "starfall_website_donation_v1" and sender and sender:isValid()
+            and sender:getClass() == "starfall_processor" and type(button) == "number" then
+            return requestDonation(payer, button)
+        end
+    end)
+
+    net.receive("donation_website_click", function(_, payer)
+        local screen = entity(net.readUInt(16))
+        local button = net.readUInt(2)
+        if not screen or not screen:isValid() or payer:getEyeTrace().Entity ~= screen
+            or payer:getEyePos():getDistance(screen:getPos()) > 200 then return end
+        for _, component in ipairs(chip():getLinkedComponents()) do
+            if component == screen and screen:getClass() == "starfall_screen" then
+                if net.getBytesLeft() < 128 then return end
+                local message = requestDonation(payer, button)
+                net.start("donation_website_result")
+                net.writeString(message)
+                net.send(payer)
+                return
+            end
+        end
+    end)
+else
+    local font = render.createFont(unpack(SITE_FONT))
+    local status = ""
+    hook.add("remote", "donation_website_frame", function(_, _, protocol)
+        if protocol == "starfall_website_screen_v1" then return buildFrame() end
+    end)
+    hook.add("render", "donation_website", function()
+        render.setFont(font)
+        for _, command in ipairs(buildFrame()) do
+            local kind, x, y, w, h, r, g, b, value = unpack(command)
+            render.setColor(Color(r, g, b))
+            if kind == "rect" then render.drawRect(x, y, w, h)
+            else render.drawText(x, y, value) end
+        end
+        render.setColor(Color(234, 245, 255))
+        render.drawText(24, 477, status)
+    end)
+    hook.add("StarfallUsed", "donation_website_buttons", function(user, screen)
+        if user ~= player() or not screen or not screen:isValid() or screen:getClass() ~= "starfall_screen" then return end
+        local x, y = render.cursorPos(user, screen)
+        if not x or not y or x < 48 or x >= 464 then return end
+        local row = math.floor((y - 154) / 74)
+        if row < 0 or row >= #AMOUNTS or (y - 154) % 74 >= 56 or net.getBytesLeft() < 32 then return end
+        net.start("donation_website_click")
+        net.writeUInt(screen:entIndex(), 16)
+        net.writeUInt(row + 1, 2)
+        net.send()
+    end)
+    net.receive("donation_website_result", function() status = net.readString() end)
+end

@@ -1,0 +1,683 @@
+--@name Starfall Computer Demo
+--@author v27.3
+--@shared
+
+-- Link a Starfall screen. Optionally wire the keyboard's Keys and User outputs
+-- to KeyboardKeys and KeyboardUser. A wired Power value of 0 turns it off.
+
+if SERVER then
+wire.adjustInputs({"KeyboardKeys", "KeyboardUser", "Power"}, {"array", "entity", "number"})
+local heldKeys = {}
+local pendingKeys, firstPendingKey, lastPendingKey = {}, 1, 0
+local keyRetryScheduled = false
+local keyboardUser
+local sentPower
+local wirePowered = true
+
+local function sendPower(ply)
+    if net.getBytesLeft() < 32 then return false end
+    net.start("demo_power")
+    net.writeBool(wirePowered)
+    net.send(ply)
+    return true
+end
+
+local function flushKeyboard()
+    if not wirePowered or not keyboardUser or not keyboardUser:isValid() or firstPendingKey > lastPendingKey then return end
+    local count = math.min(lastPendingKey - firstPendingKey + 1, 32, math.floor(net.getBytesLeft()) - 32)
+    if count > 0 then
+        net.start("demo_keys")
+        net.writeUInt(count, 9)
+        for i = firstPendingKey, firstPendingKey + count - 1 do
+            net.writeUInt(pendingKeys[i], 8)
+            pendingKeys[i] = nil
+        end
+        firstPendingKey = firstPendingKey + count
+        if firstPendingKey > lastPendingKey then firstPendingKey, lastPendingKey = 1, 0 end
+        net.send(keyboardUser)
+    end
+    if firstPendingKey <= lastPendingKey and not keyRetryScheduled then
+        keyRetryScheduled = true
+        timer.simple(0.025, function()
+            keyRetryScheduled = false
+            flushKeyboard()
+        end)
+    end
+end
+
+local function syncWirePower()
+    local powered = not wire.isConnected(chip(), "Power") or wire.ports.Power ~= 0
+    if powered ~= wirePowered then
+        wirePowered = powered
+        heldKeys = {}
+        pendingKeys, firstPendingKey, lastPendingKey = {}, 1, 0
+    end
+    if wirePowered ~= sentPower and sendPower() then sentPower = wirePowered end
+end
+
+hook.add("input", "demo_keyboard", function(port, value)
+    if port == "Power" then
+        syncWirePower()
+        return
+    end
+    if port == "KeyboardUser" then
+        if value ~= keyboardUser then
+            keyboardUser = value and value:isValid() and value:isPlayer() and value or nil
+            heldKeys = {}
+            pendingKeys, firstPendingKey, lastPendingKey = {}, 1, 0
+        end
+        return
+    end
+    if port ~= "KeyboardKeys" or not wirePowered or not keyboardUser then return end
+
+    local current = {}
+    for _, key in ipairs(value) do
+        if type(key) == "number" and key >= 0 and key <= 255 and key % 1 == 0
+            and not current[key] then
+            current[key] = true
+            if not heldKeys[key] and lastPendingKey - firstPendingKey < 127 then
+                lastPendingKey = lastPendingKey + 1
+                pendingKeys[lastPendingKey] = key
+            end
+        end
+    end
+    heldKeys = current
+    flushKeyboard()
+end)
+
+hook.add("ClientInitialized", "demo_power", function(ply)
+    syncWirePower()
+    sendPower(ply)
+end)
+timer.create("demo_power_sync", 0.5, 0, syncWirePower)
+return
+end
+
+local calculator = {entry = "", result = false}
+local CALCULATOR_KEYS = {"7", "8", "9", "/", "4", "5", "6", "*", "1", "2", "3", "-", "0", ".", "=", "+"}
+
+local gameTab = "menu"
+local poweredOn = true
+local startupUntil = 0
+local STARTUP_DURATION = 1.1
+local lastApp = false
+local selectedGame = 1
+
+local GAMES = {{tab = "mines", name = "Minesweeper", detail = "Solo puzzles with No Guess"}}
+local APPS = {{tab = "calculator", name = "Calculator", detail = "Basic arithmetic"}}
+local menuOptions = APPS
+local LAUNCHER_TOP, TILE_WIDTH, TILE_HEIGHT = 132, 232, 84
+
+local function selectMenuTab(options)
+    if menuOptions ~= options then menuOptions, selectedGame = options, 0 end
+end
+
+local function openApp()
+    gameTab = menuOptions[1].tab
+    lastApp = gameTab
+end
+
+local function toggleDesktop()
+    if gameTab ~= "menu" then gameTab = "menu"
+    elseif lastApp then gameTab = lastApp end
+end
+
+local MINE_SIDE = 8
+local MINE_CELLS = MINE_SIDE * MINE_SIDE
+local MINE_DIFFICULTIES = {{name = "Easy", count = 8}, {name = "Standard", count = 10}, {name = "Hard", count = 16}}
+local mineDifficulty = 2
+local mineNoGuess = false
+local minefield
+local mineSearch
+
+local font = render.createFont("Courier New", 17, 500)
+local titleFont = render.createFont("Roboto", 30, 700)
+local smallFont = render.createFont("Roboto", 16, 500)
+local background = Color(13, 20, 30)
+local panel = Color(23, 34, 48)
+local ink = Color(236, 244, 252)
+local muted = Color(155, 176, 198)
+local accent = Color(102, 222, 189)
+local alertColor = Color(255, 193, 130)
+
+local AUDIO = {explosion = {"ambient/explosions/explode_4.wav", 0.55}}
+
+local function playChatSound(cue)
+    local audio = AUDIO[cue]
+    pcall(function()
+        if sound and sound.emitSound then
+            sound.emitSound(audio[1], eyePos(), 65, 100, audio[2])
+        else
+            player():emitSound(audio[1], 65, 100, audio[2])
+        end
+    end)
+end
+
+local themes = {
+    {name = "Red", background = Color(34, 17, 22), panel = Color(57, 28, 37), accent = Color(255, 143, 151)},
+    {name = "Orange", background = Color(34, 22, 15), panel = Color(61, 37, 24), accent = Color(255, 167, 106)},
+    {name = "Yellow", background = Color(30, 26, 14), panel = Color(52, 46, 23), accent = Color(255, 225, 112)},
+    {name = "Green", background = Color(15, 27, 22), panel = Color(26, 47, 36), accent = Color(155, 231, 139)},
+    {name = "Blue", background = Color(15, 24, 37), panel = Color(26, 43, 65), accent = Color(137, 200, 255)},
+    {name = "Indigo", background = Color(22, 21, 39), panel = Color(37, 35, 66), accent = Color(172, 174, 255)},
+    {name = "Violet", background = Color(29, 19, 36), panel = Color(52, 33, 63), accent = Color(222, 164, 255)},
+    {name = "Black", background = Color(6, 6, 7), panel = Color(25, 25, 28), accent = Color(230, 231, 235)},
+    {name = "White", background = Color(251, 251, 252), panel = Color(228, 231, 236), accent = Color(45, 56, 77),
+        ink = Color(22, 26, 32), muted = Color(68, 76, 91), alert = Color(154, 58, 22)}
+}
+local selectedTheme = 1
+local themeConfigured = false
+local THEME_TOP = 100
+local THEME_STEP = 34
+local THEME_HEIGHT = 30
+
+local function applyTheme()
+    local theme = themes[selectedTheme]
+    background, panel, accent = theme.background, theme.panel, theme.accent
+    ink, muted, alertColor = theme.ink or ink, theme.muted or muted, theme.alert or alertColor
+    themeConfigured = true
+end
+
+local function label(x, y, value, color, face)
+    render.setFont(face or font)
+    render.setColor(color)
+    render.drawText(x, y, value)
+end
+
+local function calculatorInput(key)
+    local state = calculator
+    if key == "C" then
+        state.entry, state.left, state.operator, state.error, state.result = "", nil, nil, nil, false
+    elseif key == "Backspace" then
+        state.entry, state.error, state.result = state.entry:sub(1, -2), nil, false
+    elseif key == "." or (#key == 1 and key >= "0" and key <= "9") then
+        if state.result or state.error then
+            state.entry, state.error, state.result = "", nil, false
+        end
+        if #state.entry < 12 and (key ~= "." or not state.entry:find(".", 1, true)) then
+            if key == "." and (state.entry == "" or state.entry == "-") then state.entry = state.entry .. "0" end
+            state.entry = state.entry .. key
+        end
+    elseif key == "+" or key == "-" or key == "*" or key == "/" or key == "=" then
+        local number = tonumber(state.entry)
+        if not number then
+            if key == "-" and state.entry == "" and not state.error then state.entry = "-"
+            elseif state.operator and key ~= "=" then state.operator = key end
+            return
+        end
+        if state.operator then
+            if state.operator == "/" and number == 0 then
+                state.entry, state.left, state.operator, state.error = "", nil, nil, "Cannot divide by zero."
+                return
+            end
+            if state.operator == "+" then number = state.left + number
+            elseif state.operator == "-" then number = state.left - number
+            elseif state.operator == "*" then number = state.left * number
+            else number = state.left / number end
+        end
+        if number ~= number or math.abs(number) == math.huge then
+            state.entry, state.left, state.operator, state.error = "", nil, nil, "Result is out of range."
+        elseif key == "=" then
+            state.entry, state.left, state.operator, state.result = string.format("%.10g", number), nil, nil, true
+        else
+            state.left, state.operator, state.entry, state.result = number, key, "", false
+        end
+    end
+end
+
+local function calculatorKey(key, enter)
+    if key == 172 then gameTab = "menu"; return end
+    if enter then calculatorInput("=")
+    elseif key == 127 or key == 8 then calculatorInput("Backspace")
+    elseif key == 67 or key == 99 then calculatorInput("C")
+    elseif key >= 128 and key <= 137 then calculatorInput(tostring(key - 128))
+    elseif key >= 138 and key <= 141 then calculatorInput(({"/", "*", "-", "+"})[key - 137])
+    elseif key == 143 then calculatorInput(".")
+    elseif key >= 32 and key <= 126 then calculatorInput(string.char(key)) end
+    return true
+end
+
+local function calculatorClick(x, y)
+    if x >= 369 and y >= 426 and y < 470 then
+        gameTab = "menu"
+        return true
+    end
+    if y >= 146 and y < 177 and x >= 369 then
+        calculatorInput("C")
+    elseif y >= 184 and y < 408 then
+        local col, row = math.floor((x - 16) / 120), math.floor((y - 184) / 56)
+        if (x - 16) % 120 < 113 and (y - 184) % 56 < 49 then calculatorInput(CALCULATOR_KEYS[row * 4 + col + 1]) end
+    end
+    return true
+end
+
+local function newMinefield()
+    return {
+        cursor = 1, mines = {}, open = {}, flags = {}, opened = 0, flagCount = 0,
+        count = MINE_DIFFICULTIES[mineDifficulty].count, noGuess = mineNoGuess
+    }
+end
+
+local mineNeighbors = {}
+local function neighbors(cell)
+    if mineNeighbors[cell] then return mineNeighbors[cell] end
+    local x = (cell - 1) % MINE_SIDE
+    local y = math.floor((cell - 1) / MINE_SIDE)
+    local cells = {}
+    for row = math.max(0, y - 1), math.min(MINE_SIDE - 1, y + 1) do
+        for column = math.max(0, x - 1), math.min(MINE_SIDE - 1, x + 1) do
+            local nextCell = row * MINE_SIDE + column + 1
+            if nextCell ~= cell then cells[#cells + 1] = nextCell end
+        end
+    end
+    mineNeighbors[cell] = cells
+    return cells
+end
+
+local function generateMines(first, count)
+    local safe = {[first] = true}
+    for _, neighbor in ipairs(neighbors(first)) do safe[neighbor] = true end
+    local choices, mines = {}, {}
+    for i = 1, MINE_CELLS do
+        if not safe[i] then choices[#choices + 1] = i end
+    end
+    for i = 1, count do
+        local index = math.random(i, #choices)
+        choices[i], choices[index] = choices[index], choices[i]
+        mines[choices[i]] = true
+    end
+    return mines
+end
+
+local function revealMineArea(field, cell)
+    local queue, queued = {cell}, {[cell] = true}
+    local index = 1
+    while index <= #queue do
+        local current = queue[index]
+        local adjacent = neighbors(current)
+        local count = 0
+        for _, nextCell in ipairs(adjacent) do
+            if field.mines[nextCell] then count = count + 1 end
+        end
+        field.open[current] = count
+        field.opened = field.opened + 1
+        if count == 0 then
+            for _, nextCell in ipairs(adjacent) do
+                if not queued[nextCell] and not field.open[nextCell] and not field.flags[nextCell] then
+                    queued[nextCell] = true
+                    queue[#queue + 1] = nextCell
+                end
+            end
+        end
+        index = index + 1
+    end
+end
+
+local function mineConstraints(field)
+    local constraints = {}
+    for cell, count in pairs(field.open) do
+        local cells, set, remaining = {}, {}, count
+        for _, neighbor in ipairs(neighbors(cell)) do
+            if field.flags[neighbor] then remaining = remaining - 1
+            elseif not field.open[neighbor] then
+                cells[#cells + 1] = neighbor
+                set[neighbor] = true
+            end
+        end
+        if #cells > 0 then constraints[#constraints + 1] = {cells = cells, set = set, remaining = remaining} end
+    end
+    return constraints
+end
+
+local function applyMineDeduction(field, cells, remaining)
+    if remaining ~= 0 and remaining ~= #cells then return false end
+    local changed = false
+    for _, cell in ipairs(cells) do
+        if not field.open[cell] and not field.flags[cell] then
+            if remaining == 0 then
+                revealMineArea(field, cell)
+            else
+                field.flags[cell] = true
+            end
+            changed = true
+        end
+    end
+    return changed
+end
+
+local function solvesWithoutGuessing(mines, first, count, checkpoint)
+    local simulation = {mines = mines, open = {}, flags = {}, opened = 0}
+    revealMineArea(simulation, first)
+    while simulation.opened < MINE_CELLS - count do
+        if not checkpoint() then return false end
+        local constraints = mineConstraints(simulation)
+        local changed = false
+        for _, rule in ipairs(constraints) do
+            if applyMineDeduction(simulation, rule.cells, rule.remaining) then changed = true end
+        end
+        if not changed then
+            local comparisons = 0
+            for _, small in ipairs(constraints) do
+                for _, large in ipairs(constraints) do
+                    comparisons = comparisons + 1
+                    if comparisons % 48 == 0 and not checkpoint() then return false end
+                    if #small.cells < #large.cells then
+                        local subset = true
+                        for _, cell in ipairs(small.cells) do
+                            if not large.set[cell] then subset = false; break end
+                        end
+                        if subset then
+                            local difference = {}
+                            for _, cell in ipairs(large.cells) do
+                                if not small.set[cell] then difference[#difference + 1] = cell end
+                            end
+                            if applyMineDeduction(simulation, difference, large.remaining - small.remaining) then
+                                changed = true
+                                break
+                            end
+                        end
+                    end
+                end
+                if changed then break end
+            end
+        end
+        if not changed then return false end
+    end
+    return true
+end
+
+local function playMineCell(field, cell)
+    if field.mines[cell] then
+        playChatSound("explosion")
+        field.result = "Mine hit. Press R to try again."
+        return
+    end
+    revealMineArea(field, cell)
+    if field.opened == MINE_CELLS - field.count then
+        field.result = "You cleared the minefield! Press R to play again."
+    end
+end
+
+local function revealMineCell()
+    local field = minefield
+    local cell = field.cursor
+    if field.result or field.flags[cell] or field.open[cell] or field.generating then return end
+    if field.started then
+        playMineCell(field, cell)
+    elseif not field.noGuess then
+        field.mines, field.started = generateMines(cell, field.count), true
+        playMineCell(field, cell)
+    else
+        if mineSearch then mineSearch() end
+        field.generating, field.searchFailed = true, false
+        mineSearch = coroutine.wrap(function()
+            local function checkpoint()
+                coroutine.yield(true)
+                return minefield == field
+            end
+            for _ = 1, 120 do
+                if minefield ~= field then return end
+                local candidate = generateMines(cell, field.count)
+                if solvesWithoutGuessing(candidate, cell, field.count, checkpoint) then
+                    field.mines, field.started, field.generating = candidate, true, false
+                    playMineCell(field, cell)
+                    return
+                end
+                if not checkpoint() then return end
+            end
+            field.generating, field.searchFailed = false, true
+        end)
+    end
+end
+
+local function handleMines(key, enter)
+    local field = minefield
+    if not field then
+        if key == 17 then mineDifficulty = math.max(1, mineDifficulty - 1)
+        elseif key == 18 then mineDifficulty = math.min(#MINE_DIFFICULTIES, mineDifficulty + 1)
+        elseif key == 32 then mineNoGuess = not mineNoGuess
+        elseif enter then minefield = newMinefield() end
+        return
+    end
+    local cell = field.cursor
+    if key == 68 or key == 100 then
+        minefield = nil
+    elseif key == 82 or key == 114 then
+        minefield = newMinefield()
+    elseif field.generating then
+        return
+    elseif key == 17 and cell > MINE_SIDE then
+        field.cursor = cell - MINE_SIDE
+    elseif key == 18 and cell <= MINE_SIDE * (MINE_SIDE - 1) then
+        field.cursor = cell + MINE_SIDE
+    elseif key == 19 and (cell - 1) % MINE_SIDE > 0 then
+        field.cursor = cell - 1
+    elseif key == 20 and cell % MINE_SIDE > 0 then
+        field.cursor = cell + 1
+    elseif enter then
+        revealMineCell()
+    elseif (key == 70 or key == 102) and not field.result and not field.open[cell] then
+        if field.flags[cell] then
+            field.flags[cell] = nil
+            field.flagCount = field.flagCount - 1
+        elseif field.flagCount < field.count then
+            field.flags[cell] = true
+            field.flagCount = field.flagCount + 1
+        end
+    end
+end
+
+local function renderThemeSetup()
+    label(22, 10, "Computer setup", ink, titleFont)
+    label(22, 47, "Choose a color preset", muted, smallFont)
+    for i, theme in ipairs(themes) do
+        local y = THEME_TOP + (i - 1) * THEME_STEP
+        local active = i == selectedTheme
+        render.setColor(theme.panel)
+        render.drawRect(16, y, 480, THEME_HEIGHT)
+        render.setColor(theme.accent)
+        render.drawRect(16, y, active and 8 or 3, THEME_HEIGHT)
+        render.drawRect(438, y + 7, 34, 20)
+        label(33, y + 6, theme.name, active and theme.accent or (theme.ink or ink))
+        if active then label(315, y + 8, "Selected", theme.accent, smallFont) end
+    end
+    render.setColor(panel)
+    render.drawRect(16, 419, 480, 47)
+    label(26, 433, "Use " .. themes[selectedTheme].name, accent)
+    label(22, 483, "Aim and press E, or use Up/Down and Enter.", muted, smallFont)
+end
+
+local function renderMines()
+    local field = minefield
+    if not field then
+        label(22, 85, "Choose a difficulty", accent)
+        for i, option in ipairs(MINE_DIFFICULTIES) do
+            local y = 123 + (i - 1) * 57
+            render.setColor(panel)
+            render.drawRect(16, y, 480, 46)
+            label(29, y + 13, (i == mineDifficulty and "> " or "  ") .. option.name
+                .. "  |  " .. option.count .. " mines", i == mineDifficulty and accent or ink)
+        end
+        label(22, 311, "No Guess: " .. (mineNoGuess and "On" or "Off"), mineNoGuess and accent or ink)
+        label(22, 343, "No Guess checks for a solution using deductions.", muted, smallFont)
+        label(22, 453, "Up/Down selects  |  Space toggles No Guess", ink, smallFont)
+        label(22, 484, "Enter starts  |  Backspace / F1 Desktop", muted, smallFont)
+        return
+    end
+    local banner = field.result
+    if field.generating then banner = "Finding a No Guess board..."
+    elseif field.searchFailed then banner = "No board found. Press Enter to search again." end
+    label(22, 82, banner or ("Flags remaining: " .. (field.count - field.flagCount)
+        .. (field.noGuess and "  |  No Guess" or "")), accent, smallFont)
+    for cell = 1, MINE_CELLS do
+        local x = 96 + (cell - 1) % MINE_SIDE * 40
+        local y = 111 + math.floor((cell - 1) / MINE_SIDE) * 40
+        local number = field.open[cell]
+        local text, color = "", ink
+        if field.result and field.mines[cell] then text, color = "*", alertColor
+        elseif field.flags[cell] then text, color = "F", alertColor
+        elseif number and number > 0 then text, color = tostring(number), accent end
+        if cell == field.cursor then
+            render.setColor(accent)
+            render.drawRect(x, y, 38, 38)
+        end
+        render.setColor(number and background or panel)
+        render.drawRect(x + 2, y + 2, 34, 34)
+        label(x + 14, y + 10, text, color)
+    end
+    label(22, 453, "Arrows move  |  Enter reveals  |  F flags", ink, smallFont)
+    label(22, 484, "R restarts  |  D difficulty  |  Backspace / F1 Desktop", muted, smallFont)
+end
+
+local function renderCalculator()
+    render.setColor(panel)
+    render.drawRect(16, 85, 480, 52)
+    local state = calculator
+    local value = state.left and (string.format("%.10g", state.left) .. " " .. state.operator .. " " .. state.entry)
+        or (state.entry ~= "" and state.entry or "0")
+    label(26, 100, state.error or value, state.error and alertColor or ink)
+    label(380, 151, "Clear  C", accent, smallFont)
+    for i, key in ipairs(CALCULATOR_KEYS) do
+        local x, y = 16 + (i - 1) % 4 * 120, 184 + math.floor((i - 1) / 4) * 56
+        render.setColor(panel)
+        render.drawRect(x, y, 113, 49)
+        label(x + 48, y + 12, key, key == "=" and accent or ink)
+    end
+    render.setColor(panel)
+    render.drawRect(369, 426, 127, 44)
+    label(381, 438, "Desktop  F1", accent, smallFont)
+    label(22, 483, "Press E on buttons or use the Wiremod Keyboard.", muted, smallFont)
+end
+
+
+local function handleKey(key)
+    local enter = key == 10 or key == 13 or key == 142
+    if not themeConfigured then
+        if key == 17 then selectedTheme = math.max(1, selectedTheme - 1)
+        elseif key == 18 then selectedTheme = math.min(#themes, selectedTheme + 1)
+        elseif enter then applyTheme() end
+    elseif key == 163 then
+        toggleDesktop()
+    elseif gameTab == "calculator" then
+        calculatorKey(key, enter)
+    elseif gameTab == "mines" then
+        if key == 8 or key == 127 then gameTab = "menu"
+        else handleMines(key, enter) end
+    elseif selectedGame == 0 then
+        if key == 19 then selectMenuTab(APPS)
+        elseif key == 20 then selectMenuTab(GAMES)
+        elseif key == 18 or enter then selectedGame = 1 end
+    elseif key == 17 then
+        selectedGame = 0
+    elseif enter then
+        openApp()
+    end
+end
+
+net.receive("demo_power", function()
+    local powered = net.readBool()
+    if powered ~= poweredOn then
+        poweredOn = powered
+        startupUntil = powered and timer.curtime() + STARTUP_DURATION or 0
+    end
+end)
+
+net.receive("demo_keys", function()
+    local count = net.readUInt(9)
+    if not poweredOn or timer.curtime() < startupUntil then return end
+    for i = 1, count do handleKey(net.readUInt(8)) end
+end)
+
+hook.add("think", "demo_minesweeper", function()
+    if poweredOn and gameTab == "mines" and mineSearch and not mineSearch() then mineSearch = nil end
+end)
+
+hook.add("StarfallUsed", "demo_controls", function(user, screen)
+    if not poweredOn or timer.curtime() < startupUntil or user ~= player() or not screen
+        or not screen:isValid() or screen:getClass() ~= "starfall_screen" then return end
+    local x, y = render.cursorPos(user, screen)
+    if not x or not y or x < 16 or x >= 496 then return end
+    if not themeConfigured then
+        local offset = y - THEME_TOP
+        if offset >= 0 and offset < #themes * THEME_STEP and offset % THEME_STEP < THEME_HEIGHT then
+            selectedTheme = math.floor(offset / THEME_STEP) + 1
+        elseif y >= 419 and y < 466 then applyTheme() end
+    elseif x >= 369 and y >= 8 and y < 39 then
+        toggleDesktop()
+    elseif gameTab == "calculator" then
+        calculatorClick(x, y)
+    elseif gameTab == "mines" then
+        if not minefield and y >= 123 and y < 283 and (y - 123) % 57 < 46 then
+            mineDifficulty = math.floor((y - 123) / 57) + 1
+            minefield = newMinefield()
+        elseif not minefield and y >= 302 and y < 338 then
+            mineNoGuess = not mineNoGuess
+        elseif minefield and x >= 96 and x < 416 and y >= 111 and y < 431 then
+            minefield.cursor = math.floor((y - 111) / 40) * MINE_SIDE + math.floor((x - 96) / 40) + 1
+            revealMineCell()
+        end
+    elseif y >= 82 and y < 114 then
+        if x < 248 then selectMenuTab(APPS)
+        elseif x >= 264 then selectMenuTab(GAMES) end
+    elseif x < 248 and y >= LAUNCHER_TOP and y < LAUNCHER_TOP + TILE_HEIGHT then
+        selectedGame = 1
+        openApp()
+    end
+end)
+
+local function renderDesktop()
+    render.setColor(panel)
+    render.drawRect(16, 82, TILE_WIDTH, 32)
+    render.drawRect(264, 82, TILE_WIDTH, 32)
+    render.drawRect(16, LAUNCHER_TOP, TILE_WIDTH, TILE_HEIGHT)
+    render.setColor(accent)
+    if selectedGame == 0 then
+        render.drawRect(menuOptions == APPS and 16 or 264, 111, TILE_WIDTH, 3)
+    else
+        render.drawRect(16, LAUNCHER_TOP, 4, TILE_HEIGHT)
+    end
+    label(28, 89, "Apps", menuOptions == APPS and accent or muted)
+    label(276, 89, "Games", menuOptions == GAMES and accent or muted)
+    local app = menuOptions[1]
+    label(30, LAUNCHER_TOP + 16, app.name, selectedGame == 1 and accent or ink)
+    label(30, LAUNCHER_TOP + 48, app.detail, muted, smallFont)
+    label(22, 483, "Aim and press E, or use arrows and Enter.", muted, smallFont)
+end
+
+hook.add("render", "demo_screen", function()
+    if not poweredOn then
+        render.setColor(Color(9, 13, 19))
+        render.drawRect(0, 0, 512, 512)
+        label(22, 449, "Computer off", muted)
+        label(22, 479, "Set the Wiremod Power input to 1.", muted, smallFont)
+        return
+    end
+    local now = timer.curtime()
+    render.setColor(background)
+    render.drawRect(0, 0, 512, 512)
+    if now < startupUntil then
+        local progress = 1 - (startupUntil - now) / STARTUP_DURATION
+        label(72, 200, "Starting computer", ink, titleFont)
+        render.setColor(panel)
+        render.drawRect(72, 260, 368, 10)
+        if progress > 0 then
+            render.setColor(accent)
+            render.drawRect(72, 260, 368 * progress, 10)
+        end
+        return
+    end
+    render.setColor(panel)
+    render.drawRect(0, 0, 512, 72)
+    if not themeConfigured then renderThemeSetup(); return end
+    local title = gameTab == "calculator" and "Calculator" or (gameTab == "mines" and "Minesweeper" or "Computer Demo")
+    label(22, 10, title, ink, titleFont)
+    label(22, 46, "Offline demo", muted, smallFont)
+    if gameTab ~= "menu" or lastApp then
+        render.setColor(background)
+        render.drawRect(369, 8, 127, 31)
+        label(380, 15, gameTab == "menu" and "F1 Last app" or "F1 Desktop", accent, smallFont)
+    end
+    if gameTab == "calculator" then renderCalculator()
+    elseif gameTab == "mines" then renderMines()
+    else renderDesktop() end
+end)

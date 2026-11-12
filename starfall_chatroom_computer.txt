@@ -1,0 +1,3587 @@
+--@name Chatroom Computer
+--@author v27.3
+--@shared
+
+local CHIP_VERSION = "27.3"
+local CHANGELOG = {
+    {"v27.3", "Website Viewer supports scrolling and purchase inquiry buttons on sites that publish them."},
+    {"v27.2", "Added a desktop Settings app for changing colors and the computer name after setup."},
+    {"v27.0", "Closed apps pause polling and Minesweeper board generation. Chatrooms and joined multiplayer matches stay active. Rapid Wiremod input retries when bandwidth is busy, and overlapping arrow sounds are limited."},
+    {"v26.9", "Moved the changelog from the Chatrooms server picker to its own desktop app."},
+    {"v26.8", "F1 is the desktop shortcut across all apps and games."},
+    {"v26.7", "Website Viewer discovers site names separately and loads only the selected page."},
+    {"v26.6", "Desktop categories can be selected with Wiremod Keyboard arrow keys."},
+    {"v26.5", "Open Chatrooms from its desktop tile. F1 can resume it as the last-used app."},
+    {"v26.4", "F1 switches between the desktop and the last app while keeping the current chatroom connected. F6 leaves the room."},
+    {"v26.3", "The computer starts on a desktop launcher with Chatrooms, Website Viewer, utilities, and a Games tab."},
+    {"v25.3", "Website Viewer scans processors individually, keeps discovered sites selectable, and shows website chip uptime."},
+    {"v25.1", "Website Viewer opens native payment prompts from donation buttons and uses fonts published by website chips."},
+    {"v25.0", "Organized the launcher into Games and Apps tabs."},
+    {"v24.6", "Improved Website Viewer animation playback with a server fallback, smaller frame updates, and a playback warning."},
+    {"v24.5", "Website Viewer now shows live graphics and animation from website chips that publish a screen feed."},
+    {"v23.5", "Added a Website Viewer that discovers standalone Starfall website chips and shows their pages in a mini screen."},
+    {"v22.5", "Mapped F1 to the server list and F2 to Channels."},
+    {"v22.4", "Expanded the scrollable emoji picker to Unicode Emoji 18.0 with labeled categories and a shared font for chat, drafts, private messages, and server posts."},
+    {"v22.3", "Moved Emoji to F4 and Private Messages to F5 in room chat, and added a clickable Channels tab."},
+    {"v22.2", "Added a serialized Oregon Trail lobby reply to improve game discovery and clarified the message for older room servers."},
+    {"v22.1", "Renamed Games to Apps and moved Calculator, HUD, and Payments into it. Room-dependent apps are disabled in the server browser."},
+    {"v22.0", "Added a calculator to the server browser with on-screen buttons and Wiremod Keyboard support."},
+    {"v21.9", "Added a multiplayer Oregon Trail-inspired expedition with supplies, travel pace, forts, river crossings, and trail events."},
+    {"v20.9", "Added Black and White themes after the seven rainbow presets."},
+    {"v20.8", "Replaced the computer's color presets with seven themes in rainbow order."},
+    {"v20.7", "Server owners can rename or delete custom channels. Deleting a channel returns its players to General."},
+    {"v20.6", "Added a chat emoji picker with screen and keyboard controls."},
+    {"v20.5", "Added channel selection to the server board Posts tab."},
+    {"v20.4", "Added room channels. Server owners create channels from the board, and players switch between them with F8."},
+    {"v19.4", "Updated private inbox discovery to retry missing replies and distinguish them from servers predating private messages."},
+    {"v19.3", "Restored private messages in a separate F7 inbox with a connected-computer picker and the room's message filter."},
+    {"v18.3", "Added keyboard feedback, game move and outcome sounds, and @ComputerName mentions that highlight chat and notify the named player."},
+    {"v17.3", "Fixed Starfall pattern-limit errors in chat and moderation. Long messages use pattern-free trimming, and the filter checks split spellings by scanning characters directly."},
+    {"v17.1", "Payments use the native economy prompt. Recipients load independently of economy support, and bandwidth checks use the actual list size."},
+    {"v16.9", "Added F6 payments to the room owner and connected players, with an editable amount and a separate confirmation before sending in-game money."},
+    {"v14.9", "Fixed multiplayer game discovery to use a named server response, and separated unsupported games from missing server replies."},
+    {"v14.8", "Added UNO lobbies for two to four players, with private hands, action cards, and rematches."},
+    {"v13.8", "Room and computer names now reject listed slurs embedded in longer names or separated by spaces or punctuation. The chat filter also checks split spellings."},
+    {"v13.7", "Servers now deny computer names that contain a listed slur. Press F4 in the server picker to choose another name."},
+    {"v13.6", "The chatroom automatically kicks a player after three blocked messages. The sender sees the reason privately, and a kick resets their strike count."},
+    {"v13.5", "Added a server-side slur filter. Blocked messages stay out of chat, and only the sender sees the block notice. Ordinary swearing is allowed."},
+    {"v13.4", "Added Easy, Standard, and Hard Minesweeper presets and an optional No Guess mode that checks boards for a deduction-only solution."},
+    {"v13.3", "Minesweeper now keeps the first revealed square and all neighboring squares free of mines, so the first reveal opens an area."},
+    {"v13.2", "Multiplayer matches now tell the remaining player who left and which game closed."},
+    {"v13.1", "Added a Battleship ships-sunk tracker. A sinking shot now names the player, grid coordinate, and ship."},
+    {"v13.0", "Added a release history below the server picker. The newest entry opens automatically, and earlier updates are available with Page Up and Page Down."},
+    {"v12.9", "Battleship now lets both players place and rotate their own ships and undo placements. Firing unlocks when both fleets are complete."},
+    {"v12.8", "Added Battleship with two-player lobbies, hidden fleets, automatic placement, alternating shots, and rematches."},
+    {"v11.8", "Flipped the chessboard for Black and matched the arrow keys to the player's view."},
+    {"v11.7", "Added room chat and HUD announcements when someone creates a multiplayer lobby. Future multiplayer games share the announcement path."},
+    {"v11.6", "Added legal chess move hints and a scrollable list of the last 64 moves in standard algebraic notation."},
+    {"v11.5", "Added multiplayer Chess with separate lobbies, checkmate, stalemate, castling, en passant, pawn promotion, and rematches."},
+    {"v10.5", "Added Tic-Tac-Toe rematches. Both players press R after a win or draw to reset the board."},
+    {"v10.4", "Added a Games menu for Tic-Tac-Toe and solo Minesweeper, with a safe first reveal, flags, and restart."},
+    {"v9.4", "Added two-player Tic-Tac-Toe with separate lobby instances, turn validation, and cleanup when players leave."},
+    {"v8.4", "Added a scrollbar to Recent Posts on the server board, with access to all 24 retained posts."},
+    {"v8.3", "The optional chat HUD now shows the room name and the latest six lines, including moderation alerts."},
+    {"v7.3", "Added a connected-computer recipient picker for private messages and an optional F5 HUD label for the selected chat."},
+    {"v7.2", "Added startup computer names, duplicate-name checks, public chat attribution, and room-scoped private messaging."},
+    {"v6.2", "Added four color presets: Crimson, Glacier, Rose, and Slate."},
+    {"v6.1", "Added startup screens for choosing a computer color and configuring the server room name and optional password."},
+    {"v5.1", "Added room bans, a Banned tab for unbanning, and computer alerts when a player is kicked or banned."},
+    {"v4.1", "Added a live connected-player roster and owner-only kick controls. Kicked players see a notice and can rejoin."},
+    {"v3.1", "Updated the workspace rules to keep both chip versions matched."},
+    {"v2.1", "Added a confirmation warning for outdated or ahead servers. Players can continue joining after the warning. The server version was synced after testing."},
+    {"v1.0", "Started tracking both chip versions and showing matching, outdated, ahead, or unknown server versions."},
+    {"Before v1.0 · Room and text", "Allowed open rooms when the password is blank. Added width-based wrapping to the typing box, chat transcript, and server board."},
+    {"Before v1.0 · Discovery", "Added discovery retries, direct processor scans, a wired RoomServer-to-ServerChip fallback, and network mismatch diagnostics."},
+    {"Before v1.0 · Wire keyboard", "Added the server screen's recent-post board with author names. Switched the computer to Wiremod Keyboard input."},
+    {"Before v1.0 · Server picker", "Added a server list, masked passwords, server-side authentication, and the ability to leave a room."},
+    {"Before v1.0 · Screen chat", "Moved chat onto a linked Starfall screen with on-screen typing, message history, and scrolling."},
+    {"Before v1.0 · First release", "Introduced the chatroom server and auto-connecting computer chips, with GMod chat commands and a 24-message history."}
+}
+
+if SERVER then
+
+-- Spawn one computer per player. Match NETWORK to the server chip.
+local NETWORK = "lobby"
+local PROTOCOL = "sf_chatroom_v2"
+local server
+local room
+local roomVersion = ""
+local channelName = "General"
+local roomNotice = ""
+local sequence = 0
+local nextDiscovery = 0
+local history = {}
+local ready = false
+local nextPost = 0
+local historyDirty = true
+local available = {}
+local directorySignature
+local nextDirectoryRequest = 0
+local wiredServer
+local watchingGames = false
+local gameVisible, hasWatchedMatch = false, false
+local watchedVariant = "tic"
+local gameRevision = -1
+local gameNotice = ""
+local gamePollStatus = ""
+local paymentQuote
+local watchingPrivate = false
+local privateSignature
+local paymentSequence = 0
+local nextGameAction = 0
+local nextChessHint = 0
+
+local function sendHistory()
+    if not historyDirty or not ready or not owner():isValid() then return end
+    local bytes = 32 + #(room or "") + #roomNotice + #channelName
+    for _, entry in ipairs(history) do bytes = bytes + #entry.line + 2 end
+    if net.getBytesLeft() < bytes then return end
+    net.start("room_history")
+    net.writeString(room or "")
+    net.writeString(roomVersion)
+    net.writeUInt(#history, 5)
+    for _, entry in ipairs(history) do
+        net.writeString(entry.line)
+        net.writeBool(entry.alert)
+    end
+    net.writeString(roomNotice)
+    net.writeUInt(sequence, 32)
+    net.writeString(channelName)
+    net.send(owner())
+    historyDirty = false
+end
+
+local function request(target, action, value, extra)
+    if not target or not target:isValid() then return end
+    -- A processor can still exist after its script stops or is reloaded.
+    local ok, results = pcall(hook.runRemote, target, PROTOCOL, NETWORK, action, value, extra)
+    if ok then return results[1] end
+end
+
+local function syncGames()
+    if not watchingGames or not server or not room or net.getBytesLeft() < 1200 then return end
+    local snapshot
+    if watchedVariant == "trail" and json then
+        local trailReply = request(server, "trail_snapshot", gameRevision)
+        if trailReply and type(trailReply[1]) == "string" then
+            local ok, decoded = pcall(json.decode, trailReply[1])
+            if ok and type(decoded) == "table" then snapshot = decoded end
+        end
+    end
+    if not snapshot then
+        local reply = request(server, "game_snapshot", gameRevision, watchedVariant)
+        snapshot = reply and reply[1]
+    end
+    local pollStatus = ""
+    if type(snapshot) ~= "table" then
+        local legacy = request(server, "game_state", gameRevision, watchedVariant)
+        if legacy and type(legacy[1]) == "number"
+            and (legacy[4] == watchedVariant or watchedVariant == "tic" or legacy[1] == gameRevision) then
+            snapshot = {variant = watchedVariant, revision = legacy[1], matches = legacy[2],
+                current = legacy[3], notice = legacy[5]}
+        elseif legacy then
+            pollStatus = "This server does not support this game."
+        elseif watchedVariant == "trail" and tonumber(roomVersion) and tonumber(roomVersion) < 21.9 then
+            pollStatus = "Update the room server to play Oregon Trail."
+        else
+            pollStatus = "No game response from the server. Retrying..."
+        end
+    end
+    if type(snapshot) == "table" and (snapshot.supported == false or snapshot.variant ~= watchedVariant) then
+        pollStatus = "This server does not support this game."
+    end
+    local revision = gameRevision
+    if pollStatus == "" and type(snapshot.revision) == "number" then
+        revision = snapshot.revision
+        if revision ~= gameRevision and type(snapshot.matches) ~= "table" then
+            revision = gameRevision
+            pollStatus = "Incomplete game response from the server. Retrying..."
+        end
+    elseif pollStatus == "" then
+        pollStatus = "Invalid game response from the server. Retrying..."
+    end
+    local changed = revision ~= gameRevision and type(snapshot.matches) == "table"
+    if changed then hasWatchedMatch = type(snapshot.current) == "table" end
+    if not gameVisible and not hasWatchedMatch then
+        watchingGames = false
+        timer.remove("chatroom_games_poll")
+    end
+    if not changed and gameNotice == "" and pollStatus == gamePollStatus then return end
+    net.start("room_games_state")
+    net.writeTable({
+        changed = changed,
+        matches = changed and snapshot.matches or {},
+        current = changed and snapshot.current or nil,
+        variant = watchedVariant,
+        notice = changed and type(snapshot.notice) == "string" and snapshot.notice ~= "" and snapshot.notice
+            or (gameNotice ~= "" and gameNotice or pollStatus),
+        clearNotice = pollStatus == "" and gamePollStatus ~= ""
+    })
+    net.send(owner())
+    if changed then gameRevision = revision end
+    gameNotice, gamePollStatus = "", pollStatus
+end
+
+local function discover()
+    local now = timer.curtime()
+    if not ready or not owner():isValid() or now < nextDiscovery then return end
+    nextDiscovery = now + 2
+    local directory = {}
+    local detail = "Check that the server processor is running."
+    local function add(candidate, name, passwordRequired, version)
+        if not candidate or not candidate:isValid() or candidate:getClass() ~= "starfall_processor"
+            or type(name) ~= "string" or name == "" then return end
+        directory[candidate:entIndex()] = {
+            chip = candidate,
+            name = name:gsub("%c", " "):sub(1, 40),
+            passwordRequired = passwordRequired ~= false,
+            version = type(version) == "string" and version:match("^%d%d?%d?%.%d$") or ""
+        }
+    end
+
+    local function probe(candidate)
+        local reply = request(candidate, "probe")
+        if reply and type(reply[2]) == "string" then
+            if reply[2] == NETWORK then
+                add(candidate, reply[1], reply[3], reply[4])
+            else
+                detail = "Server network differs from " .. NETWORK:sub(1, 24) .. "."
+            end
+        else
+            reply = request(candidate, "discover_index") or request(candidate, "discover")
+            if reply then add(candidate, reply[2], reply[3], reply[4]) end
+        end
+    end
+
+    if wiredServer and wiredServer:isValid() then
+        detail = "Wired processor did not answer the chatroom probe."
+        if wiredServer:getClass() == "starfall_processor" then probe(wiredServer) end
+    end
+
+    -- Probe actual processors so discovery also works when a broadcast has no replies.
+    if find then
+        local ok, processors = pcall(find.byClass, "starfall_processor")
+        if ok then
+            local self = chip()
+            for _, candidate in ipairs(processors) do
+                if candidate ~= self and candidate ~= wiredServer then probe(candidate) end
+            end
+        elseif not (wiredServer and wiredServer:isValid()) then
+            detail = "Auto-scan unavailable. Wire RoomServer to ServerChip."
+        end
+    end
+
+    local function collect(results)
+        for _, result in ipairs(results) do
+            local candidate, name = result[1], result[2]
+            if type(candidate) == "number" then
+                if candidate >= 1 and candidate <= 65535 and candidate % 1 == 0 then
+                    candidate = entity(candidate)
+                else
+                    candidate = nil
+                end
+            elseif type(candidate) ~= "Entity" then
+                candidate = nil
+            end
+            local existing = candidate and candidate:isValid() and directory[candidate:entIndex()]
+            if not existing then add(candidate, name, result[3], result[4]) end
+        end
+    end
+    local ok, results = pcall(hook.runRemote, nil, PROTOCOL, NETWORK, "discover_index")
+    if ok then collect(results) end
+    available = directory
+    local ids = {}
+    for id in pairs(directory) do ids[#ids + 1] = id end
+    table.sort(ids)
+    local signature = {}
+    local count = math.min(#ids, 128)
+    if count > 0 then detail = "" end
+    local bytes = 32 + #detail
+    for i = 1, count do
+        local id = ids[i]
+        local entry = directory[id]
+        signature[i] = id .. ":" .. entry.version .. ":" .. tostring(entry.passwordRequired) .. ":" .. #entry.name .. ":" .. entry.name
+        bytes = bytes + #entry.name + #entry.version + 5
+    end
+    signature = detail .. "\n" .. table.concat(signature)
+    if signature == directorySignature or net.getBytesLeft() < bytes then return end
+    net.start("room_directory")
+    net.writeString(detail)
+    net.writeUInt(count, 8)
+    for i = 1, count do
+        net.writeUInt(ids[i], 16)
+        net.writeString(directory[ids[i]].name)
+        net.writeBool(directory[ids[i]].passwordRequired)
+        net.writeString(directory[ids[i]].version)
+    end
+    net.send(owner())
+    directorySignature = signature
+end
+
+local function clearRoom(notice)
+    server, room, sequence = nil, nil, 0
+    roomVersion = ""
+    channelName = "General"
+    roomNotice = notice or ""
+    history = {}
+    paymentQuote = nil
+    watchingPrivate, privateSignature = false, nil
+    watchingGames, gameVisible, hasWatchedMatch, gameRevision, gameNotice = false, false, false, -1, ""
+    timer.remove("chatroom_games_poll")
+    historyDirty = true
+    nextDiscovery = 0
+    sendHistory()
+end
+
+local function update()
+    if not server then
+        sendHistory()
+        discover()
+        return
+    end
+
+    local reply = request(server, "read", sequence)
+    if reply and reply[1] == "filter_kicked" and reply[2] == nil then
+        clearRoom("your message was blocked. You were kicked after 3 blocked messages.")
+        return
+    end
+    if reply and reply[2] == nil and (reply[1] == "kicked" or reply[1] == "banned") then
+        clearRoom("You were " .. reply[1] .. " from the chatroom.")
+        return
+    end
+    local restarted = false
+    if reply and type(reply[2]) == "number" and (reply[2] < sequence
+        or (type(reply[5]) == "string" and reply[5] ~= channelName)) then
+        sequence = 0
+        history = {}
+        restarted = true
+        reply = request(server, "read", sequence)
+    end
+    if not reply or type(reply[1]) ~= "string" or type(reply[2]) ~= "number"
+        or type(reply[3]) ~= "table" then
+        clearRoom()
+        return
+    end
+
+    historyDirty = historyDirty or restarted or room ~= reply[1] or sequence ~= reply[2]
+    room = reply[1]
+    channelName = type(reply[5]) == "string" and reply[5] or "General"
+    sequence = reply[2]
+    local alerts = type(reply[4]) == "table" and reply[4] or {}
+    for index, line in ipairs(reply[3]) do
+        if type(line) == "string" then
+            history[#history + 1] = {line = line, alert = alerts[index] == true}
+            if #history > 24 then table.remove(history, 1) end
+        end
+    end
+    sendHistory()
+end
+
+hook.add("ClientInitialized", "chatroom_history", function(ply)
+    if ply ~= owner() then return end
+    ready = true
+    historyDirty = true
+    directorySignature = nil
+    nextDiscovery = 0
+    sendHistory()
+end)
+
+wire.adjustInputs({"KeyboardKeys", "KeyboardUser", "ServerChip", "Power"}, {"array", "entity", "entity", "number"})
+wiredServer = wire.ports.ServerChip
+local heldKeys = {}
+local pendingKeys, firstPendingKey, lastPendingKey = {}, 1, 0
+local keyRetryScheduled = false
+local keyboardActive = false
+local sentKeyboardActive, sentPower
+local wirePowered = true
+
+local function syncKeyboard()
+    if not ready or net.getBytesLeft() < 32 then return end
+    if keyboardActive == sentKeyboardActive and wirePowered == sentPower then return end
+    net.start("room_keyboard")
+    net.writeBool(keyboardActive)
+    net.writeBool(wirePowered)
+    net.send(owner())
+    sentKeyboardActive, sentPower = keyboardActive, wirePowered
+end
+
+local function flushKeyboard()
+    if not ready or not wirePowered or not keyboardActive or firstPendingKey > lastPendingKey then return end
+    local count = math.min(lastPendingKey - firstPendingKey + 1, 32, math.floor(net.getBytesLeft()) - 32)
+    if count > 0 then
+        net.start("room_keys")
+        net.writeUInt(count, 9)
+        for i = firstPendingKey, firstPendingKey + count - 1 do
+            net.writeUInt(pendingKeys[i], 8)
+            pendingKeys[i] = nil
+        end
+        firstPendingKey = firstPendingKey + count
+        if firstPendingKey > lastPendingKey then firstPendingKey, lastPendingKey = 1, 0 end
+        net.send(owner())
+    end
+    if firstPendingKey <= lastPendingKey and not keyRetryScheduled then
+        keyRetryScheduled = true
+        timer.simple(0.025, function()
+            keyRetryScheduled = false
+            flushKeyboard()
+        end)
+    end
+end
+
+local function syncWirePower()
+    local powered = not wire.isConnected(chip(), "Power") or wire.ports.Power ~= 0
+    if powered ~= wirePowered then
+        wirePowered = powered
+        heldKeys = {}
+        pendingKeys, firstPendingKey, lastPendingKey = {}, 1, 0
+        if not powered then gameVisible = false end
+    end
+    syncKeyboard()
+end
+
+hook.add("input", "chatroom_keyboard", function(port, value)
+    if port == "Power" then
+        syncWirePower()
+        return
+    end
+    if port == "ServerChip" then
+        wiredServer = value
+        nextDiscovery = 0
+        return
+    end
+    if port == "KeyboardUser" then
+        local active = value == owner()
+        if active ~= keyboardActive then
+            keyboardActive = active
+            heldKeys = {}
+            pendingKeys, firstPendingKey, lastPendingKey = {}, 1, 0
+        end
+        syncKeyboard()
+        return
+    end
+    if port ~= "KeyboardKeys" or not wirePowered or not keyboardActive then return end
+
+    local current = {}
+    for _, key in ipairs(value) do
+        if type(key) == "number" and key >= 0 and key <= 255 and key % 1 == 0
+            and not current[key] then
+            current[key] = true
+            if ready and not heldKeys[key] and lastPendingKey - firstPendingKey < 127 then
+                lastPendingKey = lastPendingKey + 1
+                pendingKeys[lastPendingKey] = key
+            end
+        end
+    end
+    heldKeys = current
+    flushKeyboard()
+end)
+
+hook.add("ClientInitialized", "chatroom_keyboard", function(ply)
+    if ply ~= owner() then return end
+    sentKeyboardActive = nil
+    syncWirePower()
+end)
+timer.create("chatroom_keyboard_sync", 0.5, 0, syncWirePower)
+
+net.receive("room_directory_request", function(_, ply)
+    if ply ~= owner() then return end
+    local now = timer.curtime()
+    if now < nextDirectoryRequest then return end
+    nextDirectoryRequest = now + 1
+    ready = true
+    historyDirty = true
+    sentKeyboardActive = nil
+    directorySignature = nil
+    nextDiscovery = 0
+    syncWirePower()
+    update()
+end)
+
+local nextWebsiteRequest, requestedWebsiteId = 0, 0
+net.receive("room_website_request", function(_, ply)
+    if ply ~= owner() then return end
+    local id = net.readUInt(16)
+    local now = timer.curtime()
+    if now < nextWebsiteRequest then return end
+    nextWebsiteRequest = now + 0.4
+    local sites, seen = {}, {}
+    local function clean(value, limit)
+        return type(value) == "string" and value:sub(1, limit):gsub("[^ -~]", " ") or ""
+    end
+    local function collect(results, target)
+        if type(results) ~= "table" then return end
+        for _, result in ipairs(results) do
+            if type(result) == "table" and type(result[1]) == "number" then
+                local candidate = target or (result[1] >= 1 and result[1] <= 65535
+                    and result[1] % 1 == 0 and entity(result[1]))
+                local name = clean(result[2], 32)
+                if candidate and candidate:isValid() and candidate:getClass() == "starfall_processor" and name ~= "" then
+                    local index = candidate:entIndex()
+                    if not seen[index] then
+                        local site = {id = index, name = name, chip = candidate}
+                        seen[index] = site
+                        sites[#sites + 1] = site
+                    end
+                end
+            end
+        end
+    end
+    local function discover(processor)
+        local ok, results = pcall(hook.runRemote, processor, "starfall_website_discover_v1")
+        if ok then collect(results, processor) end
+    end
+    if wiredServer and wiredServer:isValid() then discover(wiredServer) end
+    if find then
+        local ok, processors = pcall(find.byClass, "starfall_processor")
+        if ok and type(processors) == "table" then
+            local self = chip()
+            for _, processor in ipairs(processors) do
+                if processor ~= self and processor ~= wiredServer then discover(processor) end
+            end
+        end
+    end
+    discover(nil)
+    table.sort(sites, function(first, second) return first.id < second.id end)
+
+    local selected = seen[id]
+    local page
+    if selected then
+        local ok, results = pcall(hook.runRemote, selected.chip, "starfall_website_page_v1")
+        local result = ok and type(results) == "table" and results[1]
+        if type(result) == "table" and type(result[4]) == "table" then
+            local function bounded(value, lower, upper, default)
+                if type(value) == "number" and value >= lower and value <= upper then return math.floor(value) end
+                return default
+            end
+            local style = type(result[6]) == "table" and result[6] or {}
+            local amounts = type(result[7]) == "table" and result[7] or {}
+            page = {
+                title = clean(result[3], 26), lines = {}, amounts = {},
+                mode = result[5] == "demo_timeline_v1" and 1 or (result[5] == "donation_buttons_v1" and 2 or 0),
+                face = clean(style[1], 40), size = bounded(style[2], 12, 64, 25),
+                weight = bounded(style[3], 100, 1000, 500),
+                uptime = bounded(type(result[8]) == "number" and result[8] * 10, 0, 4294967295, 0)
+            }
+            local options = type(result[9]) == "table" and result[9] or {}
+            page.height = bounded(options[1], 512, 1023, 512)
+            local buy = {
+                bounded(options[2], 0, 511, 0), bounded(options[3], 0, 1022, 0),
+                bounded(options[4], 1, 512, 0), bounded(options[5], 1, 512, 0), clean(options[6], 60)
+            }
+            if buy[3] > 0 and buy[4] > 0 and buy[1] + buy[3] <= 512
+                and buy[2] + buy[4] <= page.height and buy[5] ~= "" then page.buy = buy end
+            for i = 1, math.min(#result[4], 5) do page.lines[i] = clean(result[4][i], 42) end
+            for i = 1, 3 do page.amounts[i] = bounded(amounts[i], 1, 2147483647, 0) end
+        end
+    end
+    local count = math.min(#sites, 8)
+    local bytes = 16
+    for i = 1, count do bytes = bytes + 4 + #sites[i].name end
+    if page then
+        bytes = bytes + 40 + #page.title + #page.face + (page.buy and #page.buy[5] or 0)
+        for _, line in ipairs(page.lines) do bytes = bytes + #line + 1 end
+    end
+    if net.getBytesLeft() < bytes then return end
+    requestedWebsiteId = selected and id or 0
+    net.start("room_website_pages")
+    net.writeUInt(count, 4)
+    for i = 1, count do
+        net.writeUInt(sites[i].id, 16)
+        net.writeString(sites[i].name)
+    end
+    net.writeBool(page ~= nil)
+    if page then
+        net.writeUInt(id, 16)
+        net.writeString(page.title)
+        net.writeUInt(page.mode, 2)
+        net.writeString(page.face)
+        net.writeUInt(page.size, 7)
+        net.writeUInt(page.weight, 10)
+        net.writeUInt(page.height, 10)
+        net.writeBool(page.buy ~= nil)
+        if page.buy then
+            for i = 1, 4 do net.writeUInt(page.buy[i], 10) end
+            net.writeString(page.buy[5])
+        end
+        if page.mode == 1 then net.writeUInt(page.uptime, 32) end
+        if page.mode == 2 then
+            for i = 1, 3 do net.writeUInt(page.amounts[i], 31) end
+        end
+        net.writeUInt(#page.lines, 3)
+        for _, line in ipairs(page.lines) do net.writeString(line) end
+    end
+    net.send(ply)
+end)
+
+local nextWebsiteDonation = 0
+net.receive("room_website_donate", function(_, ply)
+    if ply ~= owner() or timer.curtime() < nextWebsiteDonation or net.getBytesLeft() < 192 then return end
+    nextWebsiteDonation = timer.curtime() + 1
+    local id, button = net.readUInt(16), net.readUInt(2)
+    local site = entity(id)
+    if not site or not site:isValid() or site:getClass() ~= "starfall_processor" or button == 0 then return end
+    local ok, results = pcall(hook.runRemote, site, "starfall_website_donation_v1", button)
+    local result = ok and type(results) == "table" and type(results[1]) == "table" and results[1][1]
+    net.start("room_website_donate_result")
+    net.writeUInt(id, 16)
+    net.writeString(type(result) == "string" and result:sub(1, 96) or "Donation site unavailable.")
+    net.send(ply)
+end)
+
+local nextWebsiteFrameRequest = 0
+net.receive("room_website_frame_request", function(_, ply)
+    if ply ~= owner() or timer.curtime() < nextWebsiteFrameRequest then return end
+    nextWebsiteFrameRequest = timer.curtime() + 0.2
+    local id = net.readUInt(16)
+    if id ~= requestedWebsiteId then return end
+    local processor = entity(id)
+    if not processor or not processor:isValid() or processor:getClass() ~= "starfall_processor" then return end
+    local ok, results = pcall(hook.runRemote, processor, "starfall_website_screen_v1")
+    local frame = ok and type(results) == "table" and type(results[1]) == "table" and results[1][1]
+    if type(frame) ~= "table" or #frame < 1 or #frame > 48 then return end
+    local commands, bytes = {}, 32
+    for _, command in ipairs(frame) do
+        if type(command) ~= "table" or (command[1] ~= "rect" and command[1] ~= "text") then return end
+        local copy = {command[1]}
+        for i = 2, 8 do
+            local number = command[i]
+            if type(number) ~= "number" or not (number >= 0 and number <= (i == 3 and 1023 or 512)) then return end
+            copy[i] = number
+        end
+        if command[1] == "text" then
+            if type(command[9]) ~= "string" or #command[9] > 96 then return end
+            copy[9] = command[9]
+        end
+        commands[#commands + 1] = copy
+        bytes = bytes + 16 + #(copy[9] or "")
+    end
+    if net.getBytesLeft() < bytes then return end
+    net.start("room_website_frame")
+    net.writeUInt(id, 16)
+    net.writeUInt(#commands, 6)
+    for _, command in ipairs(commands) do
+        net.writeBool(command[1] == "text")
+        for i = 2, 5 do net.writeUInt(math.floor(command[i] + 0.5), 10) end
+        for i = 6, 8 do net.writeUInt(math.min(255, math.floor(command[i] + 0.5)), 8) end
+        if command[1] == "text" then net.writeString(command[9]) end
+    end
+    net.send(ply)
+end)
+
+local nextJoin = 0
+net.receive("room_join", function(_, ply)
+    if ply ~= owner() or not ready or net.getBytesLeft() < 128 then return end
+    local id, password, name = net.readUInt(16), net.readString(), net.readString()
+    local entry = available[id]
+    local now = timer.curtime()
+    local result = "Server unavailable. Choose another server."
+    if now < nextJoin then
+        result = "Wait a second before trying again."
+    elseif not server and entry and #password <= 64 then
+        nextJoin = now + 0.5
+        local reply
+        if #name <= 24 and name:match("^[A-Za-z0-9_-]+$") then
+            reply = request(entry.chip, "join", password, name)
+        else
+            reply = {"Invalid computer name."}
+        end
+        if reply and type(reply[1]) == "string" then
+            result = reply[1]:sub(1, 100)
+            if result == "ok" then
+                server = entry.chip
+                roomVersion = entry.version
+                roomNotice = ""
+            end
+        end
+    end
+    net.start("room_join_result")
+    net.writeString(result)
+    net.send(ply)
+    if result == "ok" then update() end
+end)
+
+local nextRename = 0
+net.receive("room_rename", function(_, ply)
+    if ply ~= owner() or not ready or not server or net.getBytesLeft() < 160 then return end
+    local now = timer.curtime()
+    if now < nextRename then return end
+    nextRename = now + 0.5
+    local name = net.readString()
+    local result = "Invalid computer name."
+    if #name <= 24 and name:match("^[A-Za-z0-9_-]+$") then
+        local reply = request(server, "rename", name)
+        result = reply and type(reply[1]) == "string" and reply[1]:sub(1, 96) or "This room could not rename your computer."
+    end
+    net.start("room_rename_result")
+    net.writeString(result)
+    net.writeString(result == "ok" and name or "")
+    net.send(ply)
+end)
+
+net.receive("room_leave", function(_, ply)
+    if ply ~= owner() or not ready or not server then return end
+    request(server, "leave")
+    clearRoom()
+end)
+
+net.receive("room_post", function(_, ply)
+    if ply ~= owner() or not ready then return end
+    local now = timer.curtime()
+    if now < nextPost then return end
+    nextPost = now + 0.25
+
+    local message = net.readString()
+    if net.getBytesLeft() < 128 then return end
+    local result
+    if message:lower():match("^%s*/pm%f[%s%z]") then
+        result = "Private messaging has been removed."
+    else
+        local reply = #message <= 160 and request(server, "post", message)
+        result = reply and tostring(reply[1]) or "Room unavailable. Try again."
+    end
+    net.start("room_result")
+    net.writeString(result)
+    net.send(ply)
+end)
+
+local function requestPaymentFrom(payer, amount)
+    local api = economy and economy.requestMoney and economy or (darkrp and darkrp.requestMoney and darkrp)
+    if not api then return "The in-game payment API is unavailable." end
+    local ok, result = pcall(function()
+        if api.canMakeMoneyRequest and not api.canMakeMoneyRequest(payer) then
+            return "A payment request is pending or on cooldown."
+        end
+        if api.canAfford and not api.canAfford(payer, amount) then return "You cannot afford this payment." end
+        api.requestMoney(payer, amount, "Chatroom payment", nil, nil, nil)
+        return "ok"
+    end)
+    return ok and result or "Payment prompt failed. Check Starfall permissions."
+end
+
+hook.add("remote", "chatroom_payment_request", function(sender, _, protocol, network, action, payer, amount)
+    if not room or sender ~= server or protocol ~= PROTOCOL or network ~= NETWORK
+        or action ~= "payment_receive_request" then return end
+    if type(payer) ~= "Player" or not payer:isValid() or payer == owner()
+        or type(amount) ~= "number" or amount < 1 or amount > 999999999 or amount % 1 ~= 0 then
+        return "Invalid payment request."
+    end
+    return requestPaymentFrom(payer, amount)
+end)
+
+local function paymentResult(ply, data)
+    net.start("room_payment_state")
+    net.writeTable(data)
+    net.send(ply)
+end
+
+net.receive("room_payment", function(_, ply)
+    if ply ~= owner() or not room or not server or net.getBytesLeft() < 256 then return end
+    local action, id, amount = net.readUInt(2), net.readUInt(32), net.readUInt(32)
+    if action == 3 then
+        paymentQuote = nil
+        return
+    end
+    if action == 0 then
+        local reply = request(server, "payment_list")
+        if not reply or type(reply[1]) ~= "table" then
+            paymentResult(ply, {notice = "This room server did not provide a payment list."})
+            return
+        end
+        local recipients = {}
+        local bytes = 128
+        for i = 1, math.min(#reply[1], 128) do
+            local entry = reply[1][i]
+            if type(entry) == "table" and type(entry.id) == "number"
+                and type(entry.name) == "string" and type(entry.playerName) == "string" then
+                recipients[#recipients + 1] = {
+                    id = entry.id, name = entry.name:sub(1, 24), playerName = entry.playerName:gsub("%c", " "):sub(1, 48)
+                }
+                local recipient = recipients[#recipients]
+                bytes = bytes + #recipient.name + #recipient.playerName + 64
+            end
+        end
+        if net.getBytesLeft() < bytes then
+            paymentResult(ply, {notice = "Connection busy. Press R to refresh."})
+            return
+        end
+        paymentResult(ply, {recipients = recipients})
+        return
+    end
+    if action == 1 then
+        paymentQuote = nil
+        if amount < 1 or amount > 999999999 then
+            paymentResult(ply, {notice = "Enter a positive whole-dollar amount."})
+            return
+        end
+        local reply = request(server, "payment_target", id)
+        local recipient = reply and reply[1]
+        if type(recipient) ~= "Player" or not recipient:isValid() or recipient == ply then
+            paymentResult(ply, {notice = "Recipient unavailable. Press R to refresh."})
+            return
+        end
+        paymentSequence = paymentSequence + 1
+        local name = recipient:getName():gsub("%c", " "):sub(1, 48)
+        paymentQuote = {token = paymentSequence, id = id, recipient = recipient, amount = amount,
+            expires = timer.curtime() + 20}
+        paymentResult(ply, {quote = {token = paymentSequence, name = name, amount = amount}})
+        return
+    end
+    if action ~= 2 then return end
+    local quote = paymentQuote
+    if not quote or quote.token ~= id then return end
+    paymentQuote = nil
+    if timer.curtime() >= quote.expires then
+        paymentResult(ply, {finished = true, notice = "Confirmation expired. Review the payment again."})
+        return
+    end
+    local reply = request(server, "payment_target", quote.id)
+    if not reply or reply[1] ~= quote.recipient or not quote.recipient:isValid() then
+        paymentResult(ply, {finished = true, notice = "Recipient unavailable. No payment was sent."})
+        return
+    end
+    local response = request(server, "payment_request", quote.id, quote.amount)
+    local result = response and response[1]
+    local notice = "The server did not respond to the payment request."
+    if result == "ok" then notice = "Payment prompt opened. Accept it in-game to pay."
+    elseif type(result) == "string" then notice = result end
+    paymentResult(ply, {finished = true, notice = notice})
+end)
+
+local function decodePrivateSnapshot(payload)
+    if type(payload) ~= "string" or payload:sub(1, 4) ~= "PM1\n" then return end
+    local lines = {}
+    local first = 5
+    while first <= #payload do
+        local stop = payload:find("\n", first, true)
+        lines[#lines + 1] = payload:sub(first, stop and stop - 1 or #payload)
+        if not stop then break end
+        first = stop + 1
+    end
+    local revision, count = tonumber(lines[1]), tonumber(lines[2])
+    if not revision or not count or count < 0 or count > #lines - 2 or count % 1 ~= 0 then return end
+    local snapshot = {revision = revision, recipients = {}, messages = {}}
+    for i = 3, count + 2 do
+        local line = lines[i]
+        local colon = line:find(":", 1, true)
+        local id = colon and tonumber(line:sub(1, colon - 1))
+        if not id then return end
+        snapshot.recipients[#snapshot.recipients + 1] = {id = id, name = line:sub(colon + 1)}
+    end
+    for i = count + 3, #lines do snapshot.messages[#snapshot.messages + 1] = lines[i] end
+    return snapshot
+end
+
+local function syncPrivate()
+    if not watchingPrivate or not room or net.getBytesLeft() < 256 then return end
+    local reply = request(server, "private_snapshot")
+    local snapshot = reply and decodePrivateSnapshot(reply[1])
+    if not snapshot then
+        local legacy = request(server, "private_state")
+        if legacy and type(legacy[1]) == "table" then snapshot = legacy[1] end
+    end
+    local signature = {"unavailable"}
+    local bytes = 128
+    if type(snapshot) == "table" then
+        signature = {tostring(snapshot.revision)}
+        for _, entry in ipairs(snapshot.recipients) do
+            signature[#signature + 1] = tostring(entry.id)
+            bytes = bytes + #entry.name + 32
+        end
+        for _, message in ipairs(snapshot.messages) do bytes = bytes + #message + 12 end
+    else
+        local version = tonumber(roomVersion)
+        snapshot = {notice = version and version < 19.3 and "This server predates private messaging."
+            or "No private inbox reply. Retrying..."}
+    end
+    signature = table.concat(signature, ",")
+    if signature == privateSignature or net.getBytesLeft() < bytes then return end
+    net.start("room_private_state")
+    net.writeTable(snapshot)
+    net.send(owner())
+    privateSignature = signature
+end
+
+net.receive("room_private_action", function(_, ply)
+    if ply ~= owner() or not room then return end
+    local command = net.readUInt(2)
+    if command == 0 then
+        watchingPrivate, privateSignature = false, nil
+    elseif command == 1 then
+        watchingPrivate, privateSignature = true, nil
+        syncPrivate()
+    elseif command == 2 and watchingPrivate and net.getBytesLeft() >= 256 then
+        local recipient, message = net.readUInt(32), net.readString()
+        local reply = #message <= 160 and request(server, "private_send", message, recipient)
+        net.start("room_private_result")
+        net.writeString(reply and tostring(reply[1]) or "Private message could not be sent.")
+        net.send(ply)
+        syncPrivate()
+    end
+end)
+timer.create("chatroom_private_poll", 0.75, 0, syncPrivate)
+
+net.receive("room_channel_action", function(_, ply)
+    if ply ~= owner() or not room or net.getBytesLeft() < 512 then return end
+    local id = net.readUInt(32)
+    if id == 0 then
+        local reply = request(server, "channel_directory") or request(server, "channel_list")
+        net.start("room_channel_list")
+        net.writeString(reply and type(reply[1]) == "string" and reply[1]:sub(1, 480) or "")
+        net.send(ply)
+    else
+        local reply = request(server, "channel_join", id)
+        local result = reply and reply[1] or "The server did not respond."
+        net.start("room_channel_result")
+        net.writeString(tostring(result):sub(1, 100))
+        net.send(ply)
+        if result == "ok" then update() end
+    end
+end)
+
+timer.create("chatroom_poll", 0.5, 0, update)
+
+local gameActions = {[2] = "game_create", [3] = "game_join", [4] = "game_move", [5] = "game_leave", [6] = "game_rematch"}
+net.receive("room_games_action", function(_, ply)
+    if ply ~= owner() or not room then return end
+    local command, value = net.readUInt(3), net.readUInt(32)
+    if command == 0 then
+        gameVisible = false
+        syncGames()
+    elseif command == 1 then
+        local variant = ({[1] = "chess", [2] = "battleship", [3] = "trail"})[value] or "tic"
+        if hasWatchedMatch and variant ~= watchedVariant then return end
+        watchingGames, gameVisible, gameRevision, gameNotice = true, true, -1, ""
+        gamePollStatus = ""
+        watchedVariant = variant
+        timer.create("chatroom_games_poll", 0.5, 0, syncGames)
+        syncGames()
+    elseif command == 7 and watchingGames and watchedVariant == "chess"
+        and gameRevision >= 0 and timer.curtime() >= nextChessHint and net.getBytesLeft() >= 256 then
+        nextChessHint = timer.curtime() + 0.1
+        local reply = request(server, "game_hint", value, "chess")
+        if not reply or type(reply[3]) ~= "table" then return end
+        net.start("room_chess_hints")
+        net.writeTable({id = reply[1], board = reply[2], from = value, hints = reply[3]})
+        net.send(ply)
+    elseif watchingGames and gameActions[command] and timer.curtime() >= nextGameAction then
+        if watchedVariant ~= "tic" and (gameRevision < 0 or gamePollStatus ~= "") then
+            syncGames()
+            return
+        end
+        nextGameAction = timer.curtime() + 0.15
+        local reply = request(server, gameActions[command], value, watchedVariant)
+        if reply and reply[1] == "ok" and (command == 2 or command == 3) then hasWatchedMatch = true end
+        if reply and type(reply[1]) == "string" and reply[1] ~= "ok" then
+            gameNotice = reply[1]:sub(1, 100)
+        end
+        syncGames()
+    end
+end)
+return
+end
+
+local isOwner = player() == owner()
+local room = ""
+local roomVersion = ""
+local channelName = "General"
+local showChannels = false
+local calculator = {entry = "", result = false}
+local CALCULATOR_KEYS = {"7", "8", "9", "/", "4", "5", "6", "*", "1", "2", "3", "-", "0", ".", "=", "+"}
+local channelNames, selectedChannel = {}, 1
+local channelIds = {}
+local channelStatus = ""
+local channelWaiting
+local lastSequence
+local computerName = ""
+local nameDraft = ""
+local showChatHUD = false
+local showPayments = false
+local showPrivate = false
+local emojiOpen = false
+local selectedEmoji = 1
+local emojiFirstRow = 0
+local emojiDraftEnds = {}
+local EMOJI_COLUMNS, EMOJI_ROWS = 8, 6
+local EMOJI_GRID_TOP, EMOJI_GRID_LEFT = 128, 16
+local EMOJI_CATEGORY_TOP, EMOJI_CATEGORY_COLUMNS = 76, 5
+local EMOJI_CATEGORY_WIDTH, EMOJI_CATEGORY_HEIGHT = 96, 24
+-- Emoji 18.0 sequences from Unicode emoji-test.txt. Copyright 2026 Unicode, Inc.
+-- https://www.unicode.org/terms_of_use.html
+local emojiCategories = {
+    {"Faces", {
+        "😀", "😃", "😄", "😁", "😆", "😅", "🤣", "😂", "🙂", "🙃", "🫠", "😉",
+        "😊", "😇", "🥰", "😍", "🤩", "😘", "😗", "☺️", "😚", "😙", "🥲", "😋",
+        "😛", "😜", "🤪", "😝", "🤑", "🤗", "🤭", "🫢", "🫣", "🤫", "🤔", "🫡",
+        "🤐", "🤨", "😐", "😑", "😶", "🫥", "😶‍🌫️", "😏", "😒", "🙄", "😬", "😮‍💨",
+        "🤥", "🫨", "🙂‍↔️", "🙂‍↕️", "😌", "😔", "😪", "🤤", "😴", "🫩", "😷", "🤒",
+        "🤕", "🤢", "🤮", "🤧", "🥵", "🥶", "🥴", "😵", "😵‍💫", "🤯", "🤠", "🥳",
+        "🥸", "😎", "🤓", "🧐", "😕", "🫤", "😟", "🙁", "☹️", "😮", "😯", "😲",
+        "😳", "🫪", "🥺", "🥹", "😦", "😧", "😨", "😰", "😥", "😢", "😭", "😱",
+        "😖", "😣", "😞", "😓", "😩", "😫", "🥱", "😤", "😡", "😠", "🤬", "😈",
+        "👿", "💀", "☠️", "💩", "🤡", "👹", "👺", "👻", "👽", "👾", "🤖", "😺",
+        "😸", "😹", "😻", "😼", "😽", "🙀", "😿", "😾", "🙈", "🙉", "🙊", "💌",
+        "💘", "💝", "💖", "💗", "💓", "💞", "💕", "💟", "❣️", "💔", "❤️‍🔥", "❤️‍🩹",
+        "❤️", "🩷", "🧡", "💛", "💚", "💙", "🩵", "💜", "🤎", "🖤", "🩶", "🤍",
+        "💋", "💯", "💢", "🫯", "💥", "💫", "💦", "💨", "🕳️", "💬", "👁️‍🗨️", "🗨️",
+        "🗯️", "💭", "💤",
+    }},
+    {"People", {
+        "👋", "🤚", "🖐️", "✋", "🖖", "🫱", "🫲", "🫳", "🫴", "🫷", "🫸", "👌",
+        "🤌", "🤏", "✌️", "🤞", "🫰", "🤟", "🤘", "🤙", "👈", "👉", "👆", "🖕",
+        "👇", "☝️", "🫵", "👍", "👎", "✊", "👊", "🤛", "🤜", "👏", "🙌", "🫶",
+        "👐", "🤲", "🤝", "🙏", "✍️", "💅", "🤳", "💪", "🦾", "🦿", "🦵", "🦶",
+        "👂", "🦻", "👃", "🧠", "🫀", "🫁", "🦷", "🦴", "👀", "👁️", "👅", "👄",
+        "🫦", "👶", "🧒", "👦", "👧", "🧑", "👱", "👨", "🧔", "🧔‍♂️", "🧔‍♀️", "👨‍🦰",
+        "👨‍🦱", "👨‍🦳", "👨‍🦲", "👩", "👩‍🦰", "🧑‍🦰", "👩‍🦱", "🧑‍🦱", "👩‍🦳", "🧑‍🦳", "👩‍🦲", "🧑‍🦲",
+        "👱‍♀️", "👱‍♂️", "🧓", "👴", "👵", "🙍", "🙍‍♂️", "🙍‍♀️", "🙎", "🙎‍♂️", "🙎‍♀️", "🙅",
+        "🙅‍♂️", "🙅‍♀️", "🙆", "🙆‍♂️", "🙆‍♀️", "💁", "💁‍♂️", "💁‍♀️", "🙋", "🙋‍♂️", "🙋‍♀️", "🧏",
+        "🧏‍♂️", "🧏‍♀️", "🙇", "🙇‍♂️", "🙇‍♀️", "🤦", "🤦‍♂️", "🤦‍♀️", "🤷", "🤷‍♂️", "🤷‍♀️", "🥷",
+        "🫅", "🤴", "👸", "👳", "👳‍♂️", "👳‍♀️", "👲", "🧕", "🤵", "🤵‍♂️", "🤵‍♀️", "👰",
+        "👰‍♂️", "👰‍♀️", "🤰", "🫃", "🫄", "🤱", "👩‍🍼", "👨‍🍼", "🧑‍🍼", "👼", "🎅", "🤶",
+        "🧑‍🎄", "🦸", "🦸‍♂️", "🦸‍♀️", "🦹", "🦹‍♂️", "🦹‍♀️", "🧙", "🧙‍♂️", "🧙‍♀️", "🧚", "🧚‍♂️",
+        "🧚‍♀️", "🧛", "🧛‍♂️", "🧛‍♀️", "🧜", "🧜‍♂️", "🧜‍♀️", "🧝", "🧝‍♂️", "🧝‍♀️", "🧞", "🧞‍♂️",
+        "🧞‍♀️", "🧟", "🧟‍♂️", "🧟‍♀️", "🧌", "🫈", "💆", "💆‍♂️", "💆‍♀️", "💇", "💇‍♂️", "💇‍♀️",
+        "🚶", "🚶‍♂️", "🚶‍♀️", "🚶‍➡️", "🚶‍♀️‍➡️", "🚶‍♂️‍➡️", "🧍", "🧍‍♂️", "🧍‍♀️", "🧎", "🧎‍♂️", "🧎‍♀️",
+        "🧎‍➡️", "🧎‍♀️‍➡️", "🧎‍♂️‍➡️", "🧑‍🦯", "🧑‍🦯‍➡️", "👨‍🦯", "👨‍🦯‍➡️", "👩‍🦯", "👩‍🦯‍➡️", "🧑‍🦼", "🧑‍🦼‍➡️", "👨‍🦼",
+        "👨‍🦼‍➡️", "👩‍🦼", "👩‍🦼‍➡️", "🧑‍🦽", "🧑‍🦽‍➡️", "👨‍🦽", "👨‍🦽‍➡️", "👩‍🦽", "👩‍🦽‍➡️", "🏃", "🏃‍♂️", "🏃‍♀️",
+        "🏃‍➡️", "🏃‍♀️‍➡️", "🏃‍♂️‍➡️", "💃", "🕺", "🕴️", "👯", "👯‍♂️", "👯‍♀️", "🧖", "🧖‍♂️", "🧖‍♀️",
+        "🧗", "🧗‍♂️", "🧗‍♀️", "🤺", "🏇", "⛷️", "🏂", "🏌️", "🏌️‍♂️", "🏌️‍♀️", "🏄", "🏄‍♂️",
+        "🏄‍♀️", "🚣", "🚣‍♂️", "🚣‍♀️", "🏊", "🏊‍♂️", "🏊‍♀️", "⛹️", "⛹️‍♂️", "⛹️‍♀️", "🏋️", "🏋️‍♂️",
+        "🏋️‍♀️", "🚴", "🚴‍♂️", "🚴‍♀️", "🚵", "🚵‍♂️", "🚵‍♀️", "🤸", "🤸‍♂️", "🤸‍♀️", "🤼", "🤼‍♂️",
+        "🤼‍♀️", "🤽", "🤽‍♂️", "🤽‍♀️", "🤾", "🤾‍♂️", "🤾‍♀️", "🤹", "🤹‍♂️", "🤹‍♀️", "🧘", "🧘‍♂️",
+        "🧘‍♀️", "🛀", "🛌", "🗣️", "👤", "👥", "🫂", "👣", "🫆", "🦰", "🦱", "🦳",
+        "🦲",
+    }},
+    {"Nature", {
+        "🐵", "🐒", "🦍", "🦧", "🐶", "🐕", "🦮", "🐕‍🦺", "🐩", "🐺", "🦊", "🦝",
+        "🐱", "🐈", "🐈‍⬛", "🦁", "🐯", "🐅", "🐆", "🐴", "🫎", "🫏", "🐎", "🦄",
+        "🦓", "🦌", "🦬", "🐮", "🐂", "🐃", "🐄", "🐷", "🐖", "🐗", "🐽", "🐏",
+        "🐑", "🐐", "🐪", "🐫", "🦙", "🦒", "🐘", "🦣", "🦏", "🦛", "🐭", "🐁",
+        "🐀", "🐹", "🐰", "🐇", "🐿️", "🦫", "🦔", "🦇", "🐻", "🐻‍❄️", "🐨", "🐼",
+        "🦥", "🦦", "🦨", "🦘", "🦡", "🐾", "🦃", "🐔", "🐓", "🐣", "🐤", "🐥",
+        "🐦", "🐧", "🕊️", "🦅", "🦆", "🦢", "🦉", "🦤", "🪶", "🦩", "🦚", "🦜",
+        "🪽", "🐦‍⬛", "🪿", "🐦‍🔥", "🐸", "🐊", "🐢", "🦎", "🐍", "🐲", "🐉", "🦕",
+        "🦖", "🐳", "🐋", "🐬", "🫍", "🦭", "🐟", "🐠", "🐡", "🦈", "🐙", "🐚",
+        "🪸", "🪼", "🦀", "🦞", "🦐", "🦑", "🦪", "🐌", "🦋", "🫌", "🐛", "🐜",
+        "🐝", "🪲", "🐞", "🦗", "🪳", "🕷️", "🕸️", "🦂", "🦟", "🪰", "🪱", "🦠",
+        "💐", "🌸", "💮", "🪷", "🏵️", "🌹", "🥀", "🌺", "🌻", "🌼", "🌷", "🪻",
+        "🌱", "🪴", "🌲", "🌳", "🌴", "🌵", "🌾", "🌿", "☘️", "🍀", "🍁", "🍂",
+        "🍃", "🪹", "🪺", "🍄", "🪾",
+    }},
+    {"Food", {
+        "🍇", "🍈", "🍉", "🍊", "🍋", "🍋‍🟩", "🍌", "🍍", "🥭", "🍎", "🍏", "🍐",
+        "🍑", "🍒", "🍓", "🫐", "🥝", "🍅", "🫒", "🥥", "🥑", "🍆", "🥔", "🥕",
+        "🌽", "🌶️", "🫑", "🥒", "🫝", "🥬", "🥦", "🧄", "🧅", "🥜", "🫘", "🌰",
+        "🫚", "🫛", "🍄‍🟫", "🫜", "🍞", "🥐", "🥖", "🫓", "🥨", "🥯", "🥞", "🧇",
+        "🧀", "🍖", "🍗", "🥩", "🥓", "🍔", "🍟", "🍕", "🌭", "🥪", "🌮", "🌯",
+        "🫔", "🥙", "🧆", "🥚", "🍳", "🥘", "🍲", "🫕", "🥣", "🥗", "🍿", "🧈",
+        "🧂", "🥫", "🍱", "🍘", "🍙", "🍚", "🍛", "🍜", "🍝", "🍠", "🍢", "🍣",
+        "🍤", "🍥", "🥮", "🍡", "🥟", "🥠", "🥡", "🍦", "🍧", "🍨", "🍩", "🍪",
+        "🎂", "🍰", "🧁", "🥧", "🍫", "🍬", "🍭", "🍮", "🍯", "🍼", "🥛", "☕",
+        "🫖", "🍵", "🍶", "🍾", "🍷", "🍸", "🍹", "🍺", "🍻", "🥂", "🥃", "🫗",
+        "🥤", "🧋", "🧃", "🧉", "🧊", "🥢", "🍽️", "🍴", "🥄", "🔪", "🫙", "🏺",
+    }},
+    {"Travel", {
+        "🌍", "🌎", "🌏", "🌐", "🗺️", "🗾", "🧭", "🏔️", "⛰️", "🛘", "🌋", "🗻",
+        "🏕️", "🏖️", "🏜️", "🏝️", "🏞️", "🏟️", "🏛️", "🏗️", "🧱", "🪨", "🪵", "🛖",
+        "🏘️", "🏚️", "🏠", "🏡", "🏢", "🏣", "🏤", "🏥", "🏦", "🏨", "🏩", "🏪",
+        "🏫", "🏬", "🏭", "🏯", "🏰", "💒", "🗼", "🗽", "⛪", "🕌", "🛕", "🕍",
+        "⛩️", "🕋", "⛲", "⛺", "🌁", "🌃", "🏙️", "🌄", "🌅", "🌆", "🌇", "🌉",
+        "♨️", "🎠", "🛝", "🎡", "🎢", "💈", "🎪", "🚂", "🚃", "🚄", "🚅", "🚆",
+        "🚇", "🚈", "🚉", "🚊", "🚝", "🚞", "🚋", "🚌", "🚍", "🚎", "🚐", "🚑",
+        "🚒", "🚓", "🚔", "🚕", "🚖", "🚗", "🚘", "🚙", "🛻", "🚚", "🚛", "🚜",
+        "🏎️", "🏍️", "🛵", "🦽", "🦼", "🛺", "🚲", "🛴", "🛹", "🛼", "🚏", "🛣️",
+        "🛤️", "🛢️", "⛽", "🛞", "🚨", "🚥", "🚦", "🛑", "🚧", "🛙", "⚓", "🛟",
+        "⛵", "🛶", "🚤", "🛳️", "⛴️", "🛥️", "🚢", "✈️", "🛩️", "🛫", "🛬", "🪂",
+        "💺", "🚁", "🚟", "🚠", "🚡", "🛰️", "🚀", "🛸", "🛎️", "🧳", "⌛", "⏳",
+    }},
+    {"Activities", {
+        "🎃", "🎄", "🎆", "🎇", "🧨", "✨", "🎈", "🎉", "🎊", "🎋", "🎍", "🎎",
+        "🎏", "🎐", "🎑", "🧧", "🎀", "🎁", "🎗️", "🎟️", "🎫", "🎖️", "🏆", "🏅",
+        "🥇", "🥈", "🥉", "⚽", "⚾", "🥎", "🏀", "🏐", "🏈", "🏉", "🎾", "🥏",
+        "🎳", "🏏", "🏑", "🏒", "🥍", "🏓", "🏸", "🥊", "🥋", "🥅", "⛳", "⛸️",
+        "🎣", "🤿", "🎽", "🎿", "🛷", "🥌", "🎯", "🪀", "🪁", "🔫", "🎱", "🔮",
+        "🪄", "🎮", "🕹️", "🎰", "🎲", "🧩", "🧸", "🪅", "🪩", "🪆", "♠️", "♥️",
+        "♦️", "♣️", "♟️", "🃏", "🀄", "🎴", "🎭", "🖼️", "🎨", "🧵", "🪡", "🧶",
+        "🪢",
+    }},
+    {"Objects", {
+        "👓", "🕶️", "🥽", "🥼", "🦺", "👔", "👕", "👖", "🧣", "🧤", "🧥", "🧦",
+        "👗", "👘", "🥻", "🩱", "🩲", "🩳", "👙", "👚", "🪭", "👛", "👜", "👝",
+        "🛍️", "🎒", "🩴", "👞", "👟", "🥾", "🥿", "👠", "👡", "🩰", "👢", "🪮",
+        "👑", "👒", "🎩", "🎓", "🧢", "🪖", "⛑️", "📿", "💄", "💍", "💎", "🔇",
+        "🔈", "🔉", "🔊", "📢", "📣", "📯", "🔔", "🔕", "🎼", "🎵", "🎶", "🎙️",
+        "🎚️", "🎛️", "🎤", "🎧", "📻", "🎷", "🎺", "🪊", "🪗", "🎸", "🎹", "🎻",
+        "🪕", "🥁", "🪘", "🪇", "🪈", "🪉", "📱", "📲", "☎️", "📞", "📟", "📠",
+        "🔋", "🪫", "🔌", "💻", "🖥️", "🖨️", "⌨️", "🖱️", "🖲️", "💽", "💾", "💿",
+        "📀", "🧮", "🎥", "🎞️", "📽️", "🎬", "📺", "📷", "📸", "📹", "📼", "🔍",
+        "🔎", "🕯️", "💡", "🔦", "🏮", "🪔", "📔", "📕", "📖", "📗", "📘", "📙",
+        "📚", "📓", "📒", "📃", "📜", "📄", "📰", "🗞️", "📑", "🔖", "🏷️", "🪙",
+        "💰", "🪎", "💴", "💵", "💶", "💷", "💸", "💳", "🧾", "💹", "✉️", "📧",
+        "📨", "📩", "📤", "📥", "📦", "📫", "📪", "📬", "📭", "📮", "🗳️", "✏️",
+        "✒️", "🖋️", "🖊️", "🖌️", "🖍️", "📝", "🪌", "💼", "📁", "📂", "🗂️", "📅",
+        "📆", "🗒️", "🗓️", "📇", "📈", "📉", "📊", "📋", "📌", "📍", "📎", "🖇️",
+        "📏", "📐", "✂️", "🗃️", "🗄️", "🗑️", "🔒", "🔓", "🔏", "🔐", "🔑", "🗝️",
+        "🪍", "🔨", "🪓", "⛏️", "⚒️", "🛠️", "🗡️", "⚔️", "💣", "🪃", "🏹", "🛡️",
+        "🪚", "🔧", "🪛", "🔩", "⚙️", "🗜️", "⚖️", "🦯", "🔗", "⛓️‍💥", "⛓️", "🪝",
+        "🧰", "🧲", "🪜", "🪏", "⚗️", "🧪", "🧫", "🧬", "🔬", "🔭", "📡", "💉",
+        "🩸", "💊", "🩹", "🩼", "🩺", "🩻", "🚪", "🛗", "🪞", "🪟", "🛏️", "🛋️",
+        "🪑", "🚽", "🪠", "🚿", "🛁", "🪤", "🪒", "🧴", "🧷", "🧹", "🧺", "🧻",
+        "🪣", "🧼", "🫧", "🪥", "🧽", "🧯", "🛒", "🚬", "⚰️", "🪦", "⚱️", "🧿",
+        "🪬", "🗿", "🪧", "🪪",
+    }},
+    {"Symbols", {
+        "🏧", "🚮", "🚰", "♿", "🚹", "🚺", "🚻", "🚼", "🚾", "🛂", "🛃", "🛄",
+        "🛅", "⚠️", "🚸", "⛔", "🚫", "🚳", "🚭", "🚯", "🚱", "🚷", "📵", "🔞",
+        "☢️", "☣️", "⬆️", "↗️", "➡️", "↘️", "⬇️", "↙️", "⬅️", "↖️", "↕️", "↔️",
+        "↩️", "↪️", "⤴️", "⤵️", "🔃", "🔄", "🔙", "🔚", "🔛", "🔜", "🔝", "🛐",
+        "⚛️", "🕉️", "✡️", "☸️", "☯️", "✝️", "☦️", "☪️", "☮️", "🕎", "🔯", "🪯",
+        "♈", "♉", "♊", "♋", "♌", "♍", "♎", "♏", "♐", "♑", "♒", "♓",
+        "⛎", "🔀", "🔁", "🔂", "▶️", "⏩", "⏭️", "⏯️", "◀️", "⏪", "⏮️", "🔼",
+        "⏫", "🔽", "⏬", "⏸️", "⏹️", "⏺️", "⏏️", "🎦", "🔅", "🔆", "📶", "🛜",
+        "📳", "📴", "♀️", "♂️", "⚧️", "✖️", "➕", "➖", "➗", "🟰", "♾️", "‼️",
+        "⁉️", "❓", "❔", "❕", "❗", "〰️", "💱", "💲", "⚕️", "♻️", "⚜️", "🔱",
+        "📛", "🔰", "⭕", "✅", "☑️", "✔️", "❌", "❎", "➰", "➿", "〽️", "✳️",
+        "✴️", "❇️", "©️", "®️", "™️", "🫟", "#️⃣", "*️⃣", "0️⃣", "1️⃣", "2️⃣", "3️⃣",
+        "4️⃣", "5️⃣", "6️⃣", "7️⃣", "8️⃣", "9️⃣", "🔟", "🔠", "🔡", "🔢", "🔣", "🔤",
+        "🅰️", "🆎", "🅱️", "🆑", "🆒", "🆓", "ℹ️", "🆔", "Ⓜ️", "🆕", "🆖", "🅾️",
+        "🆗", "🅿️", "🆘", "🆙", "🆚", "🈁", "🈂️", "🈷️", "🈶", "🈯", "🉐", "🈹",
+        "🈚", "🈲", "🉑", "🈸", "🈴", "🈳", "㊗️", "㊙️", "🈺", "🈵", "🔴", "🟠",
+        "🟡", "🟢", "🔵", "🟣", "🟤", "⚫", "⚪", "🟥", "🟧", "🟨", "🟩", "🟦",
+        "🟪", "🟫", "⬛", "⬜", "◼️", "◻️", "◾", "◽", "▪️", "▫️", "🔶", "🔷",
+        "🔸", "🔹", "🔺", "🔻", "💠", "🔘", "🔳", "🔲",
+    }},
+    {"Flags", {
+        "🏁", "🚩", "🎌", "🏴", "🏳️", "🏳️‍🌈", "🏳️‍⚧️", "🏴‍☠️",
+    }},
+}
+local emojiCategory = 1
+local EMOJIS = emojiCategories[emojiCategory][2]
+local privateRecipients, privateRows = {}, {}
+local privateSelection, privateScroll = 0, 0
+local privateDraft, privateStatus = "", ""
+local privateWaiting
+local paymentRecipients = {}
+local paymentSelection = 1
+local paymentAmount = ""
+local paymentStatus = ""
+local paymentReview
+local paymentWaiting
+local gameTab = "menu"
+local poweredOn = true
+local startupUntil = 0
+local lastApp = false
+local selectedGame = 1
+local websitePages, selectedWebsite = {}, 1
+local websiteLoaded = false
+local websiteFrame, websiteFrameSite
+local startWebsitePolling
+local websiteControls = {message = ""}
+
+function websiteControls.scroll(delta)
+    local page = websitePages[selectedWebsite]
+    if not page or not page.height then return end
+    page.scroll = math.max(0, math.min(page.height - 512, (page.scroll or 0) + delta))
+    websiteControls.message = ""
+end
+
+function websiteControls.buy(x, y)
+    local page = websitePages[selectedWebsite]
+    local buy = page and page.buy
+    if not buy or not websiteFrame or websiteFrameSite ~= page.id then return end
+    local top = buy[2] - (page.scroll or 0)
+    if x then
+        if x < buy[1] or x >= buy[1] + buy[3] or y < 0 or y >= 512 or y < top or y >= top + buy[4] then return end
+    elseif top < 0 or top + buy[4] > 512 then return end
+    websiteControls.message = buy[5]
+end
+
+local function requestWebsiteDonation(slot)
+    local page = websitePages[selectedWebsite]
+    if not page or not page.donation or (page.amounts[slot] or 0) == 0 then return end
+    if net.getBytesLeft() < 32 then
+        websiteControls.message = "Connection busy. Try again shortly."
+        return
+    end
+    net.start("room_website_donate")
+    net.writeUInt(page.id, 16)
+    net.writeUInt(slot, 2)
+    net.send()
+end
+
+local function stepWebsite(delta)
+    if #websitePages < 2 then return end
+    selectedWebsite = (selectedWebsite - 1 + delta) % #websitePages + 1
+    websiteControls.message = ""
+end
+local GAMES = {
+    {tab = "tic", name = "Tic-Tac-Toe", detail = "Two players in this chatroom"},
+    {tab = "mines", name = "Minesweeper", detail = "Solo puzzles with No Guess"},
+    {tab = "chess", name = "Chess", detail = "Two players in this chatroom"},
+    {tab = "battleship", name = "Battleship", detail = "Two players  |  10 x 10 grids"},
+    {tab = "trail", name = "Oregon Trail", detail = "Expedition for up to four"}
+}
+local APPS = {
+    {tab = "chatrooms", name = "Chatrooms", detail = "Find and join a room"},
+    {tab = "website", name = "Website Viewer", detail = "Browse Starfall sites"},
+    {tab = "calculator", name = "Calculator", detail = "Basic arithmetic"},
+    {tab = "hud", name = "HUD", detail = "Toggle the chat overlay"},
+    {tab = "payments", name = "Payments", detail = "Send in-game money", needsRoom = true},
+    {tab = "changelog", name = "Changelog", detail = "Browse release history"},
+    {tab = "settings", name = "Settings", detail = "Colors and computer name"}
+}
+local menuOptions = APPS
+local LAUNCHER_TOP, TILE_WIDTH, TILE_HEIGHT, TILE_GAP = 132, 232, 68, 16
+
+local function selectMenuTab(options)
+    if menuOptions == options then return end
+    menuOptions, selectedGame = options, 0
+end
+local trailChoice = 1
+local MULTIPLAYER_TABS = {tic = 0, chess = 1, battleship = 2, trail = 3}
+local battleshipCursor = 1
+local battleshipVertical = false
+local chessCursor, chessFrom, chessPromotion = 61, nil, false
+local chessHints = {}
+local chessMoveScroll = 0
+local CHESS_MOVE_ROWS = 15
+local MINE_SIDE = 8
+local MINE_CELLS = MINE_SIDE * MINE_SIDE
+local MINE_DIFFICULTIES = {{name = "Easy", count = 8}, {name = "Standard", count = 10}, {name = "Hard", count = 16}}
+local mineDifficulty = 2
+local mineNoGuess = false
+local minefield
+local mineSearch
+local matches = {}
+local currentGame
+local gameWatchTab, gameEntryUntil
+local selectedMatch = 1
+local gameStatus = ""
+local activeAlert
+local alertUntil = 0
+local rows = {}
+local keyboardActive = false
+local draft = ""
+local status = ""
+local waitingUntil
+local directory = {}
+local directoryReceived = false
+local directoryDetail = ""
+local selected = 1
+local changelogPage = 1
+local renderedChangelogPage
+local changelogRows = {}
+local PICKER_ROWS = 6
+local joining
+local versionWarning
+local password = ""
+local joinUntil
+local scroll = 0
+local ROWS_VISIBLE = 13
+local COMPOSER_ROWS = 5
+local lastPrompt
+local promptRows = {}
+local font = render.createFont("Courier New", 17, 500)
+local titleFont = render.createFont("Roboto", 30, 700)
+local smallFont = render.createFont("Roboto", 16, 500)
+local emojiFont = render.createFont("Segoe UI Emoji", 18, 500)
+local background = Color(13, 20, 30)
+local panel = Color(23, 34, 48)
+local ink = Color(236, 244, 252)
+local muted = Color(155, 176, 198)
+local accent = Color(102, 222, 189)
+local alertColor = Color(255, 193, 130)
+local AUDIO = {
+    key = {"buttons/button15.wav", 0.22},
+    enter = {"buttons/button14.wav", 0.38},
+    game = {"buttons/lightswitch2.wav", 0.26},
+    chess = {"physics/wood/wood_box_impact_soft1.wav", 0.5},
+    tic = {"buttons/button9.wav", 0.48},
+    splash = {"ambient/water/water_splash1.wav", 0.58},
+    explosion = {"ambient/explosions/explode_4.wav", 0.55},
+    mention = {"buttons/button17.wav", 0.55}
+}
+
+local function playChatSound(cue)
+    if not isOwner then return end
+    local audio = AUDIO[cue]
+    pcall(function()
+        if sound and sound.emitSound then
+            sound.emitSound(audio[1], eyePos(), 65, 100, audio[2])
+        else
+            player():emitSound(audio[1], 65, 100, audio[2])
+        end
+    end)
+end
+
+local function isMentionNameByte(byte)
+    return byte and ((byte >= 97 and byte <= 122) or (byte >= 48 and byte <= 57) or byte == 45 or byte == 95)
+end
+
+local function messageMentions(message, name)
+    if name == "" then return false end
+    local colon = message:find(": ", 1, true)
+    if not colon then return false end
+    local body = message:sub(colon + 2):lower()
+    local wanted = name:lower()
+    local from = 1
+    while true do
+        local at = body:find("@", from, true)
+        if not at then return false end
+        if (at == 1 or not isMentionNameByte(body:byte(at - 1)))
+            and body:sub(at + 1, at + #wanted) == wanted
+            and not isMentionNameByte(body:byte(at + #wanted + 1)) then
+            return true
+        end
+        from = at + 1
+    end
+end
+local themes = {
+    defaultInk = ink, defaultMuted = muted, defaultAlert = alertColor, startupDuration = 1.1,
+    {name = "Red", background = Color(34, 17, 22), panel = Color(57, 28, 37), accent = Color(255, 143, 151)},
+    {name = "Orange", background = Color(34, 22, 15), panel = Color(61, 37, 24), accent = Color(255, 167, 106)},
+    {name = "Yellow", background = Color(30, 26, 14), panel = Color(52, 46, 23), accent = Color(255, 225, 112)},
+    {name = "Green", background = Color(15, 27, 22), panel = Color(26, 47, 36), accent = Color(155, 231, 139)},
+    {name = "Blue", background = Color(15, 24, 37), panel = Color(26, 43, 65), accent = Color(137, 200, 255)},
+    {name = "Indigo", background = Color(22, 21, 39), panel = Color(37, 35, 66), accent = Color(172, 174, 255)},
+    {name = "Violet", background = Color(29, 19, 36), panel = Color(52, 33, 63), accent = Color(222, 164, 255)},
+    {name = "Black", background = Color(6, 6, 7), panel = Color(25, 25, 28), accent = Color(230, 231, 235)},
+    {name = "White", background = Color(251, 251, 252), panel = Color(228, 231, 236), accent = Color(45, 56, 77),
+        ink = Color(22, 26, 32), muted = Color(68, 76, 91), alert = Color(154, 58, 22)}
+}
+local settings = {theme = 1, page = "color", name = "", message = ""}
+local themeConfigured = false
+local THEME_TOP = 100
+local THEME_STEP = 34
+local THEME_HEIGHT = 30
+
+local function applyTheme()
+    local theme = themes[settings.theme]
+    background, panel, accent = theme.background, theme.panel, theme.accent
+    ink, muted, alertColor = theme.ink or themes.defaultInk, theme.muted or themes.defaultMuted, theme.alert or themes.defaultAlert
+    themeConfigured = true
+end
+function themes.selectAt(y)
+    if y >= THEME_TOP and y < THEME_TOP + #themes * THEME_STEP then
+        local offset = y - THEME_TOP
+        if offset % THEME_STEP < THEME_HEIGHT then
+            settings.theme = math.floor(offset / THEME_STEP) + 1
+        end
+    elseif y >= 419 and y < 466 then
+        applyTheme()
+    end
+end
+
+function settings.selectPage(page)
+    if settings.page == page then return end
+    settings.page = page
+    if page == "name" then settings.name = computerName end
+end
+
+function settings.saveName()
+    if settings.waiting then return end
+    local name = settings.name
+    if #name < 1 or #name > 24 or not name:match("^[A-Za-z0-9_-]+$") then
+        settings.message = "Use 1-24 letters, numbers, hyphens or underscores."
+    elseif name == computerName then
+        settings.message = "Name saved."
+    elseif room == "" then
+        computerName, settings.message = name, "Name saved."
+    elseif net.getBytesLeft() < 64 then
+        settings.message = "Connection busy. Try again shortly."
+    else
+        settings.waiting = timer.curtime() + 5
+        settings.message = "Saving name..."
+        net.start("room_rename")
+        net.writeString(name)
+        net.send()
+    end
+end
+
+local function wrapText(value, width, face)
+    render.setFont(face)
+    local lines, starts = {}, {}
+    for offset in value:gmatch("()[^\128-\191][\128-\191]*") do
+        starts[#starts + 1] = offset
+    end
+    local count = #starts
+    starts[count + 1] = #value + 1
+    local first = 1
+    while first <= count do
+        local low, high = first, count
+        while low <= high do
+            local middle = math.floor((low + high) / 2)
+            local candidate = value:sub(starts[first], starts[middle + 1] - 1)
+            if render.getTextSize(candidate) <= width then
+                low = middle + 1
+            else
+                high = middle - 1
+            end
+        end
+        local last = math.max(first, high)
+        if last < count then
+            for i = last, first + 1, -1 do
+                if value:sub(starts[i], starts[i]) == " " then
+                    last = i
+                    break
+                end
+            end
+        end
+        lines[#lines + 1] = value:sub(starts[first], starts[last + 1] - 1)
+        first = last + 1
+    end
+    return lines
+end
+
+local function label(x, y, value, color, face)
+    render.setFont(face or font)
+    render.setColor(color)
+    render.drawText(x, y, value)
+end
+
+local function calculatorInput(key)
+    local state = calculator
+    if key == "C" then
+        state.entry, state.left, state.operator, state.error, state.result = "", nil, nil, nil, false
+    elseif key == "Backspace" then
+        state.entry, state.error, state.result = state.entry:sub(1, -2), nil, false
+    elseif key == "." or (#key == 1 and key >= "0" and key <= "9") then
+        if state.result or state.error then
+            state.entry, state.error, state.result = "", nil, false
+        end
+        if #state.entry < 12 and (key ~= "." or not state.entry:find(".", 1, true)) then
+            if key == "." and (state.entry == "" or state.entry == "-") then state.entry = state.entry .. "0" end
+            state.entry = state.entry .. key
+        end
+    elseif key == "+" or key == "-" or key == "*" or key == "/" or key == "=" then
+        local number = tonumber(state.entry)
+        if not number then
+            if key == "-" and state.entry == "" and not state.error then state.entry = "-"
+            elseif state.operator and key ~= "=" then state.operator = key end
+            return
+        end
+        if state.operator then
+            if state.operator == "/" and number == 0 then
+                state.entry, state.left, state.operator, state.error = "", nil, nil, "Cannot divide by zero."
+                return
+            end
+            if state.operator == "+" then number = state.left + number
+            elseif state.operator == "-" then number = state.left - number
+            elseif state.operator == "*" then number = state.left * number
+            else number = state.left / number end
+        end
+        if number ~= number or math.abs(number) == math.huge then
+            state.entry, state.left, state.operator, state.error = "", nil, nil, "Result is out of range."
+        elseif key == "=" then
+            state.entry, state.left, state.operator, state.result = string.format("%.10g", number), nil, nil, true
+        else
+            state.left, state.operator, state.entry, state.result = number, key, "", false
+        end
+    end
+end
+
+local function calculatorKey(key, enter)
+    if key == 172 then gameTab = "menu"; return end
+    if enter then calculatorInput("=")
+    elseif key == 127 or key == 8 then calculatorInput("Backspace")
+    elseif key == 67 or key == 99 then calculatorInput("C")
+    elseif key >= 128 and key <= 137 then calculatorInput(tostring(key - 128))
+    elseif key >= 138 and key <= 141 then calculatorInput(({"/", "*", "-", "+"})[key - 137])
+    elseif key == 143 then calculatorInput(".")
+    elseif key >= 32 and key <= 126 then calculatorInput(string.char(key)) end
+    return true
+end
+
+local function calculatorClick(x, y)
+    if x >= 369 and y >= 426 and y < 470 then
+        gameTab = "menu"
+        return true
+    end
+    if y >= 146 and y < 177 and x >= 369 then
+        calculatorInput("C")
+    elseif y >= 184 and y < 408 then
+        local col, row = math.floor((x - 16) / 120), math.floor((y - 184) / 56)
+        if (x - 16) % 120 < 113 and (y - 184) % 56 < 49 then calculatorInput(CALCULATOR_KEYS[row * 4 + col + 1]) end
+    end
+    return true
+end
+
+local function insertEmoji()
+    local symbol = EMOJIS[selectedEmoji]
+    if #draft + #symbol <= 160 then
+        draft = draft .. symbol
+        emojiDraftEnds[#draft] = symbol
+        emojiOpen, status = false, ""
+    else
+        status = "The draft is full."
+    end
+end
+
+local function eraseDraftCharacter()
+    local last = #draft
+    local emoji = emojiDraftEnds[last]
+    if emoji and draft:sub(-#emoji) == emoji then
+        emojiDraftEnds[last] = nil
+        draft = draft:sub(1, last - #emoji)
+        return
+    end
+    while last > 1 and draft:byte(last) >= 128 and draft:byte(last) <= 191 do last = last - 1 end
+    draft = draft:sub(1, last - 1)
+end
+
+local function selectEmoji(index)
+    selectedEmoji = math.max(1, math.min(#EMOJIS, index))
+    local row = math.floor((selectedEmoji - 1) / EMOJI_COLUMNS)
+    if row < emojiFirstRow then emojiFirstRow = row
+    elseif row >= emojiFirstRow + EMOJI_ROWS then emojiFirstRow = row - EMOJI_ROWS + 1 end
+end
+
+local function selectEmojiCategory(index)
+    if not emojiCategories[index] then return end
+    emojiCategory = index
+    EMOJIS = emojiCategories[index][2]
+    selectedEmoji, emojiFirstRow = 1, 0
+end
+
+local function handleEmojiKey(key, enter)
+    if key == 166 then
+        emojiOpen = not emojiOpen
+        return true
+    end
+    if not emojiOpen then return false end
+    if key == 17 then selectEmoji(selectedEmoji - EMOJI_COLUMNS)
+    elseif key == 18 then selectEmoji(selectedEmoji + EMOJI_COLUMNS)
+    elseif key == 19 then selectEmoji(selectedEmoji - 1)
+    elseif key == 20 then selectEmoji(selectedEmoji + 1)
+    elseif key == 151 then selectEmoji(selectedEmoji - EMOJI_COLUMNS * EMOJI_ROWS)
+    elseif key == 152 then selectEmoji(selectedEmoji + EMOJI_COLUMNS * EMOJI_ROWS)
+    elseif key >= 49 and key <= 57 then selectEmojiCategory(key - 48)
+    elseif enter then insertEmoji() end
+    return true
+end
+
+local function versionStatus(version)
+    local serverVersion = tonumber(version)
+    if not serverVersion then return "Server version unknown", false end
+    local computerVersion = tonumber(CHIP_VERSION)
+    local text = "Server v" .. version
+    if serverVersion < computerVersion then return text .. " (outdated)", true end
+    if serverVersion > computerVersion then return text .. " (ahead)", true end
+    return text, false
+end
+
+local function sendGameAction(command, value)
+    if net.getBytesLeft() < 48 then return false end
+    net.start("room_games_action")
+    net.writeUInt(command, 3)
+    net.writeUInt(value or 0, 32)
+    net.send()
+    return true
+end
+
+local function sendPrivateAction(command, recipient, message)
+    if net.getBytesLeft() < #(message or "") + 48 then
+        privateStatus = "Connection busy. Try again shortly."
+        return false
+    end
+    net.start("room_private_action")
+    net.writeUInt(command, 2)
+    if command == 2 then
+        net.writeUInt(recipient, 32)
+        net.writeString(message)
+    end
+    net.send()
+    return true
+end
+
+local function sendChannelAction(id)
+    if net.getBytesLeft() < 48 then return end
+    channelWaiting = timer.curtime() + 5
+    net.start("room_channel_action")
+    net.writeUInt(id, 32)
+    net.send()
+end
+
+local function toggleChannels()
+    if channelWaiting then return end
+    showChannels = not showChannels
+    if showChannels then
+        channelStatus = "Loading channels..."
+        sendChannelAction(0)
+    end
+end
+
+local function handlePrivate(key, enter, character)
+    if privateWaiting then return end
+    if (key == 17 or key == 18) and #privateRecipients > 0 then
+        privateSelection = math.max(1, math.min(#privateRecipients, privateSelection + (key == 17 and -1 or 1)))
+    elseif key == 151 then
+        privateScroll = math.min(privateScroll + 5, math.max(0, #privateRows - 6))
+    elseif key == 152 then
+        privateScroll = math.max(0, privateScroll - 5)
+    elseif key == 127 or key == 8 then
+        privateDraft = privateDraft:sub(1, -2)
+    elseif enter and privateDraft:find("%S") then
+        local recipient = privateRecipients[privateSelection]
+        if not recipient then
+            privateStatus = "Select a connected computer first."
+        else
+            privateWaiting = timer.curtime() + 5
+            privateStatus = "Sending..."
+            if not sendPrivateAction(2, recipient.id, privateDraft) then privateWaiting = nil end
+        end
+    elseif character and #privateDraft < 160 then
+        privateDraft = privateDraft .. character
+    end
+end
+
+local function sendPaymentAction(action, id, amount)
+    if net.getBytesLeft() < 64 then
+        paymentStatus = "Connection busy. Try again shortly."
+        return false
+    end
+    net.start("room_payment")
+    net.writeUInt(action, 2)
+    net.writeUInt(id or 0, 32)
+    net.writeUInt(amount or 0, 32)
+    net.send()
+    return true
+end
+
+local function refreshPayments()
+    paymentStatus = "Loading recipients..."
+    sendPaymentAction(0)
+end
+
+local function handlePayment(key, enter)
+    if paymentWaiting then return end
+    if paymentReview then
+        if key == 127 or key == 8 then
+            sendPaymentAction(3)
+            paymentReview, paymentStatus = nil, ""
+        elseif enter then
+            local token = paymentReview.token
+            paymentWaiting = timer.curtime() + 5
+            paymentStatus = "Opening payment prompt..."
+            if not sendPaymentAction(2, token) then paymentWaiting = nil end
+        end
+        return
+    end
+    if key == 17 then
+        paymentSelection = math.max(1, paymentSelection - 1)
+    elseif key == 18 then
+        paymentSelection = math.max(1, math.min(#paymentRecipients, paymentSelection + 1))
+    elseif key >= 48 and key <= 57 and #paymentAmount < 9 then
+        paymentAmount = paymentAmount .. string.char(key)
+    elseif key == 127 or key == 8 then
+        paymentAmount = paymentAmount:sub(1, -2)
+    elseif key == 82 or key == 114 then
+        refreshPayments()
+    elseif enter then
+        local recipient = paymentRecipients[paymentSelection]
+        local amount = tonumber(paymentAmount)
+        if not recipient then
+            paymentStatus = "Select a recipient first."
+        elseif not amount or amount < 1 then
+            paymentStatus = "Enter a positive whole-dollar amount."
+        else
+            paymentWaiting = timer.curtime() + 5
+            paymentStatus = "Checking recipient..."
+            if not sendPaymentAction(1, recipient.id, amount) then paymentWaiting = nil end
+        end
+    end
+end
+
+local function changeGameTab(tab)
+    if room == "" and (MULTIPLAYER_TABS[tab] or tab == "payments") then return end
+    if gameTab == "payments" and paymentWaiting then return end
+    if MULTIPLAYER_TABS[tab] and tab ~= gameWatchTab
+        and (currentGame or (gameEntryUntil and timer.curtime() < gameEntryUntil)) then return end
+    if MULTIPLAYER_TABS[gameTab] and tab ~= gameTab and not sendGameAction(0) then return end
+    if MULTIPLAYER_TABS[tab] then
+        if not sendGameAction(1, MULTIPLAYER_TABS[tab]) then return end
+        if tab ~= gameWatchTab then
+            matches, currentGame, selectedMatch, gameStatus = {}, nil, 1, ""
+            chessFrom, chessPromotion = nil, false
+            chessHints, chessMoveScroll = {}, 0
+            battleshipCursor, battleshipVertical = 1, false
+        end
+        gameWatchTab = tab
+    end
+    if showPayments then
+        sendPaymentAction(3)
+        showPayments, paymentReview = false, nil
+    end
+    if gameTab == "website" and tab ~= "website" then
+        timer.remove("room_website_refresh")
+        timer.remove("room_website_screen_refresh")
+        websiteFrame, websiteFrameSite = nil, nil
+    end
+    gameTab = tab
+    if tab == "website" then startWebsitePolling() end
+    if tab ~= "menu" then lastApp = tab end
+    if tab == "payments" then
+        showPayments = true
+        refreshPayments()
+    end
+end
+
+local function toggleLastApp()
+    if joinUntil then return end
+    if gameTab == "menu" then
+        if room == "" and (MULTIPLAYER_TABS[lastApp] or lastApp == "payments") then lastApp = false end
+        if lastApp ~= false then changeGameTab(lastApp) end
+        return
+    end
+    joining, versionWarning, password = nil, nil, ""
+    if showPrivate then sendPrivateAction(0) end
+    showPrivate, showChannels, emojiOpen = false, false, false
+    changeGameTab("menu")
+end
+
+local function newMinefield()
+    return {
+        cursor = 1, mines = {}, open = {}, flags = {}, opened = 0, flagCount = 0,
+        count = MINE_DIFFICULTIES[mineDifficulty].count, noGuess = mineNoGuess
+    }
+end
+
+local mineNeighbors = {}
+local function neighbors(cell)
+    if mineNeighbors[cell] then return mineNeighbors[cell] end
+    local x = (cell - 1) % MINE_SIDE
+    local y = math.floor((cell - 1) / MINE_SIDE)
+    local cells = {}
+    for row = math.max(0, y - 1), math.min(MINE_SIDE - 1, y + 1) do
+        for column = math.max(0, x - 1), math.min(MINE_SIDE - 1, x + 1) do
+            local nextCell = row * MINE_SIDE + column + 1
+            if nextCell ~= cell then cells[#cells + 1] = nextCell end
+        end
+    end
+    mineNeighbors[cell] = cells
+    return cells
+end
+
+local function generateMines(first, count)
+    local safe = {[first] = true}
+    for _, neighbor in ipairs(neighbors(first)) do safe[neighbor] = true end
+    local choices, mines = {}, {}
+    for i = 1, MINE_CELLS do
+        if not safe[i] then choices[#choices + 1] = i end
+    end
+    for i = 1, count do
+        local index = math.random(i, #choices)
+        choices[i], choices[index] = choices[index], choices[i]
+        mines[choices[i]] = true
+    end
+    return mines
+end
+
+local function revealMineArea(field, cell)
+    local queue, queued = {cell}, {[cell] = true}
+    local index = 1
+    while index <= #queue do
+        local current = queue[index]
+        local adjacent = neighbors(current)
+        local count = 0
+        for _, nextCell in ipairs(adjacent) do
+            if field.mines[nextCell] then count = count + 1 end
+        end
+        field.open[current] = count
+        field.opened = field.opened + 1
+        if count == 0 then
+            for _, nextCell in ipairs(adjacent) do
+                if not queued[nextCell] and not field.open[nextCell] and not field.flags[nextCell] then
+                    queued[nextCell] = true
+                    queue[#queue + 1] = nextCell
+                end
+            end
+        end
+        index = index + 1
+    end
+end
+
+local function mineConstraints(field)
+    local constraints = {}
+    for cell, count in pairs(field.open) do
+        local cells, set, remaining = {}, {}, count
+        for _, neighbor in ipairs(neighbors(cell)) do
+            if field.flags[neighbor] then remaining = remaining - 1
+            elseif not field.open[neighbor] then
+                cells[#cells + 1] = neighbor
+                set[neighbor] = true
+            end
+        end
+        if #cells > 0 then constraints[#constraints + 1] = {cells = cells, set = set, remaining = remaining} end
+    end
+    return constraints
+end
+
+local function applyMineDeduction(field, cells, remaining)
+    if remaining ~= 0 and remaining ~= #cells then return false end
+    local changed = false
+    for _, cell in ipairs(cells) do
+        if not field.open[cell] and not field.flags[cell] then
+            if remaining == 0 then
+                revealMineArea(field, cell)
+            else
+                field.flags[cell] = true
+            end
+            changed = true
+        end
+    end
+    return changed
+end
+
+local function solvesWithoutGuessing(mines, first, count, checkpoint)
+    local simulation = {mines = mines, open = {}, flags = {}, opened = 0}
+    revealMineArea(simulation, first)
+    while simulation.opened < MINE_CELLS - count do
+        if not checkpoint() then return false end
+        local constraints = mineConstraints(simulation)
+        local changed = false
+        for _, rule in ipairs(constraints) do
+            if applyMineDeduction(simulation, rule.cells, rule.remaining) then changed = true end
+        end
+        if not changed then
+            local comparisons = 0
+            for _, small in ipairs(constraints) do
+                for _, large in ipairs(constraints) do
+                    comparisons = comparisons + 1
+                    if comparisons % 48 == 0 and not checkpoint() then return false end
+                    if #small.cells < #large.cells then
+                        local subset = true
+                        for _, cell in ipairs(small.cells) do
+                            if not large.set[cell] then subset = false; break end
+                        end
+                        if subset then
+                            local difference = {}
+                            for _, cell in ipairs(large.cells) do
+                                if not small.set[cell] then difference[#difference + 1] = cell end
+                            end
+                            if applyMineDeduction(simulation, difference, large.remaining - small.remaining) then
+                                changed = true
+                                break
+                            end
+                        end
+                    end
+                end
+                if changed then break end
+            end
+        end
+        if not changed then return false end
+    end
+    return true
+end
+
+local function playMineCell(field, cell)
+    if field.mines[cell] then
+        playChatSound("explosion")
+        field.result = "Mine hit. Press R to try again."
+        return
+    end
+    revealMineArea(field, cell)
+    if field.opened == MINE_CELLS - field.count then
+        field.result = "You cleared the minefield! Press R to play again."
+    end
+end
+
+local function revealMineCell()
+    local field = minefield
+    local cell = field.cursor
+    if field.result or field.flags[cell] or field.open[cell] or field.generating then return end
+    if field.started then
+        playMineCell(field, cell)
+    elseif not field.noGuess then
+        field.mines, field.started = generateMines(cell, field.count), true
+        playMineCell(field, cell)
+    else
+        if mineSearch then mineSearch() end
+        field.generating, field.searchFailed = true, false
+        mineSearch = coroutine.wrap(function()
+            local function checkpoint()
+                coroutine.yield(true)
+                return minefield == field
+            end
+            for _ = 1, 120 do
+                if minefield ~= field then return end
+                local candidate = generateMines(cell, field.count)
+                if solvesWithoutGuessing(candidate, cell, field.count, checkpoint) then
+                    field.mines, field.started, field.generating = candidate, true, false
+                    playMineCell(field, cell)
+                    return
+                end
+                if not checkpoint() then return end
+            end
+            field.generating, field.searchFailed = false, true
+        end)
+    end
+end
+
+local function enterSelectedGame()
+    local tab = menuOptions[selectedGame].tab
+    if tab == "chatrooms" then changeGameTab(nil)
+    else changeGameTab(tab) end
+end
+
+local function handleBattleship(key, enter)
+    if key == 17 and battleshipCursor > 10 then battleshipCursor = battleshipCursor - 10
+    elseif key == 18 and battleshipCursor <= 90 then battleshipCursor = battleshipCursor + 10
+    elseif key == 19 and (battleshipCursor - 1) % 10 > 0 then battleshipCursor = battleshipCursor - 1
+    elseif key == 20 and battleshipCursor % 10 > 0 then battleshipCursor = battleshipCursor + 1
+    elseif currentGame.ready == false then
+        if key == 82 or key == 114 then battleshipVertical = not battleshipVertical
+        elseif key == 85 or key == 117 then sendGameAction(4, 301)
+        elseif enter and currentGame.nextShip > 0 then
+            sendGameAction(4, battleshipCursor + (battleshipVertical and 200 or 100))
+        end
+    elseif enter and currentGame.guest ~= "" and currentGame.winner == ""
+        and currentGame.turn == currentGame.mark then sendGameAction(4, battleshipCursor) end
+end
+
+local function handleTrail(key, enter, character)
+    if not currentGame.trail then
+        if currentGame.isHost and character and character:lower() == "s" then sendGameAction(4, 10) end
+        return
+    end
+    if currentGame.trail.result then
+        if character and character:lower() == "r" then sendGameAction(6) end
+        return
+    end
+    trailChoice = math.min(trailChoice, #currentGame.choices)
+    if key == 17 then trailChoice = math.max(1, trailChoice - 1)
+    elseif key == 18 then trailChoice = math.min(#currentGame.choices, trailChoice + 1)
+    elseif enter and currentGame.canMove then sendGameAction(4, trailChoice) end
+end
+
+local function orientChessSquare(square, mark)
+    return mark == "O" and 65 - square or square
+end
+
+local function moveChessCursor(key)
+    local tile = orientChessSquare(chessCursor, currentGame.mark)
+    if key == 17 and tile > 8 then tile = tile - 8
+    elseif key == 18 and tile <= 56 then tile = tile + 8
+    elseif key == 19 and (tile - 1) % 8 > 0 then tile = tile - 1
+    elseif key == 20 and tile % 8 > 0 then tile = tile + 1 end
+    chessCursor = orientChessSquare(tile, currentGame.mark)
+end
+
+local function submitChessMove(promotion)
+    if sendGameAction(4, chessFrom * 256 + (chessCursor - 1) * 4 + promotion) then
+        chessFrom, chessPromotion = nil, false
+        chessHints = {}
+    end
+end
+
+local function handleChess(key, enter, character)
+    if chessPromotion then
+        local promotion = character and ("qrbn"):find(character:lower(), 1, true)
+        if promotion then submitChessMove(promotion - 1)
+        elseif key == 8 or key == 127 then chessFrom, chessPromotion, chessHints = nil, false, {} end
+        return
+    end
+    local moves = currentGame.moves or {}
+    if key == 151 then
+        chessMoveScroll = math.min(chessMoveScroll + 8, math.max(0, #moves - CHESS_MOVE_ROWS))
+    elseif key == 152 then
+        chessMoveScroll = math.max(0, chessMoveScroll - 8)
+    end
+    moveChessCursor(key)
+    if not enter or currentGame.guest == "" or currentGame.turn ~= currentGame.mark
+        or currentGame.winner ~= "" then return end
+    local piece = currentGame.board:sub(chessCursor, chessCursor)
+    local own = piece ~= "." and (piece == piece:upper()) == (currentGame.mark == "X")
+    if own then
+        chessFrom = chessFrom ~= chessCursor and chessCursor or nil
+        chessHints = {}
+        if chessFrom then sendGameAction(7, chessFrom) end
+    elseif chessFrom then
+        local moving = currentGame.board:sub(chessFrom, chessFrom):lower()
+        if moving == "p" and (chessCursor <= 8 or chessCursor > 56) then chessPromotion = true
+        else submitChessMove(0) end
+    end
+end
+
+local function handleMines(key, enter)
+    local field = minefield
+    if not field then
+        if key == 17 then mineDifficulty = math.max(1, mineDifficulty - 1)
+        elseif key == 18 then mineDifficulty = math.min(#MINE_DIFFICULTIES, mineDifficulty + 1)
+        elseif key == 32 then mineNoGuess = not mineNoGuess
+        elseif enter then minefield = newMinefield() end
+        return
+    end
+    local cell = field.cursor
+    if key == 68 or key == 100 then
+        minefield = nil
+    elseif key == 82 or key == 114 then
+        minefield = newMinefield()
+    elseif field.generating then
+        return
+    elseif key == 17 and cell > MINE_SIDE then
+        field.cursor = cell - MINE_SIDE
+    elseif key == 18 and cell <= MINE_SIDE * (MINE_SIDE - 1) then
+        field.cursor = cell + MINE_SIDE
+    elseif key == 19 and (cell - 1) % MINE_SIDE > 0 then
+        field.cursor = cell - 1
+    elseif key == 20 and cell % MINE_SIDE > 0 then
+        field.cursor = cell + 1
+    elseif enter then
+        revealMineCell()
+    elseif (key == 70 or key == 102) and not field.result and not field.open[cell] then
+        if field.flags[cell] then
+            field.flags[cell] = nil
+            field.flagCount = field.flagCount - 1
+        elseif field.flagCount < field.count then
+            field.flags[cell] = true
+            field.flagCount = field.flagCount + 1
+        end
+    end
+end
+
+if isOwner then
+    local nextWebsiteRefresh, lastWebsiteRequest = 0, nil
+    local function refreshWebsite()
+        if gameTab ~= "website" then return end
+        local page = websitePages[selectedWebsite]
+        local id = page and page.id or 0
+        local now = timer.curtime()
+        if (id == lastWebsiteRequest and now < nextWebsiteRefresh) or net.getBytesLeft() < 32 then return end
+        lastWebsiteRequest, nextWebsiteRefresh = id, now + 2
+        net.start("room_website_request")
+        net.writeUInt(id, 16)
+        net.send()
+    end
+
+    local nextWebsiteRelay = 0
+    local function refreshWebsiteFrame()
+        local page = websitePages[selectedWebsite]
+        if gameTab ~= "website" or not page or not page.title or page.demo or page.donation then
+            websiteFrame, websiteFrameSite = nil, nil
+            return
+        end
+        local processor = entity(page.id)
+        if processor and processor:isValid() and processor:getClass() == "starfall_processor" then
+            local ok, results = pcall(hook.runRemote, processor, "starfall_website_screen_v1")
+            local frame = ok and type(results) == "table" and type(results[1]) == "table" and results[1][1]
+            if type(frame) == "table" and #frame > 0 and #frame <= 48 then
+                websiteFrame, websiteFrameSite = frame, page.id
+                return
+            end
+        end
+        local now = timer.curtime()
+        if now < nextWebsiteRelay or net.getBytesLeft() < 32 then return end
+        nextWebsiteRelay = now + 0.25
+        net.start("room_website_frame_request")
+        net.writeUInt(page.id, 16)
+        net.send()
+    end
+
+    startWebsitePolling = function()
+        nextWebsiteRefresh, lastWebsiteRequest, nextWebsiteRelay = 0, nil, 0
+        timer.create("room_website_refresh", 0.5, 0, refreshWebsite)
+        timer.create("room_website_screen_refresh", 0.05, 0, refreshWebsiteFrame)
+        refreshWebsite()
+    end
+
+    net.receive("room_website_frame", function()
+        local id = net.readUInt(16)
+        local page = websitePages[selectedWebsite]
+        if gameTab ~= "website" or not page or page.id ~= id then return end
+        local frame = {}
+        local count = net.readUInt(6)
+        for i = 1, count do
+            local command = {net.readBool() and "text" or "rect"}
+            for j = 2, 5 do command[j] = net.readUInt(10) end
+            for j = 6, 8 do command[j] = net.readUInt(8) end
+            if command[1] == "text" then command[9] = net.readString() end
+            frame[i] = command
+        end
+        websiteFrame, websiteFrameSite = frame, id
+    end)
+
+    net.receive("room_website_donate_result", function()
+        local id, message = net.readUInt(16), net.readString()
+        local page = websitePages[selectedWebsite]
+        if gameTab == "website" and page and page.id == id then websiteControls.message = message end
+    end)
+
+    net.receive("room_website_pages", function()
+        if gameTab ~= "website" then return end
+        local previous = websitePages[selectedWebsite]
+        local count = net.readUInt(4)
+        local pages, byId, selection = {}, {}, 1
+        for i = 1, count do
+            local page = {id = net.readUInt(16), name = net.readString()}
+            if previous and page.id == previous.id then
+                selection = i
+                previous.name = page.name
+                page = previous
+            end
+            pages[i], byId[page.id] = page, page
+        end
+        if net.readBool() then
+            local id = net.readUInt(16)
+            local page = byId[id] or {}
+            page.title = net.readString()
+            local mode = net.readUInt(2)
+            page.demo, page.donation = mode == 1, mode == 2
+            page.face, page.size, page.weight = net.readString(), net.readUInt(7), net.readUInt(10)
+            page.height = net.readUInt(10)
+            page.scroll = math.min(page.scroll or 0, page.height - 512)
+            page.buy = nil
+            if net.readBool() then
+                page.buy = {}
+                for i = 1, 4 do page.buy[i] = net.readUInt(10) end
+                page.buy[5] = net.readString()
+            end
+            page.amounts, page.lines = {}, {}
+            if page.demo then page.startedAt = timer.curtime() - net.readUInt(32) / 10 end
+            if page.donation then
+                for i = 1, 3 do page.amounts[i] = net.readUInt(31) end
+            end
+            local lineCount = net.readUInt(3)
+            for i = 1, lineCount do page.lines[i] = net.readString() end
+        end
+        websitePages, selectedWebsite, websiteLoaded = pages, selection, true
+    end)
+
+    net.receive("room_channel_list", function()
+        local names = net.readString()
+        channelWaiting, channelNames, channelIds = nil, {}, {}
+        if not showChannels then return end
+        for entry in names:gmatch("[^\n]+") do
+            local colon = entry:find(":", 1, true)
+            local id = colon and tonumber(entry:sub(1, colon - 1))
+            local name = id and entry:sub(colon + 1) or entry
+            channelNames[#channelNames + 1] = name
+            channelIds[#channelNames] = id or #channelNames
+            if name == channelName then selectedChannel = #channelNames end
+        end
+        selectedChannel = math.max(1, math.min(#channelNames, selectedChannel))
+        channelStatus = #channelNames == 0 and "This server did not provide a channel list." or ""
+    end)
+
+    net.receive("room_channel_result", function()
+        local result = net.readString()
+        channelWaiting = nil
+        if result == "ok" then
+            if channelNames[selectedChannel] == channelName then showChannels = false
+            else
+                channelWaiting = timer.curtime() + 5
+                channelStatus = "Switching channels..."
+            end
+        else channelStatus = result end
+    end)
+
+    net.receive("room_private_state", function()
+        local snapshot = net.readTable()
+        if not showPrivate then return end
+        local previous = privateRecipients[privateSelection]
+        privateRecipients, privateSelection, privateRows = snapshot.recipients or {}, 0, {}
+        for i, entry in ipairs(privateRecipients) do
+            if previous and entry.id == previous.id then privateSelection = i end
+        end
+        for _, message in ipairs(snapshot.messages or {}) do
+            for _, line in ipairs(wrapText(message, 460, emojiFont)) do privateRows[#privateRows + 1] = line end
+        end
+        privateScroll = math.min(privateScroll, math.max(0, #privateRows - 6))
+        if snapshot.notice then privateStatus = snapshot.notice
+        elseif privateStatus == "No private inbox reply. Retrying..." then privateStatus = "" end
+    end)
+
+    net.receive("room_private_result", function()
+        local result = net.readString()
+        if not privateWaiting then return end
+        privateWaiting = nil
+        if result == "ok" then privateDraft, privateScroll = "", 0 end
+        privateStatus = result == "ok" and "Private message sent." or result
+    end)
+
+    net.receive("room_payment_state", function()
+        local result = net.readTable()
+        if not showPayments then return end
+        if result.recipients then
+            local selected = paymentRecipients[paymentSelection]
+            paymentRecipients, paymentSelection = result.recipients, 1
+            for i, entry in ipairs(paymentRecipients) do
+                if selected and entry.id == selected.id then paymentSelection = i end
+            end
+        end
+        if result.finished then paymentReview = nil end
+        if result.quote then paymentReview = result.quote end
+        paymentWaiting = nil
+        paymentStatus = result.notice or ""
+    end)
+
+    hook.add("StarfallUsed", "chatroom_theme", function(user, screen)
+        if user ~= player() or not screen or not screen:isValid()
+            or screen:getClass() ~= "starfall_screen" then return end
+        local x, y = render.cursorPos(user, screen)
+        if not poweredOn or timer.curtime() < startupUntil or not x or not y or x < 16 or x >= 496 then return end
+        if themeConfigured then
+            if room ~= "" and not gameTab and not showPayments and not showPrivate and not emojiOpen
+                and x >= 265 and x < 365 and y >= 8 and y < 39 then
+                toggleChannels()
+                return
+            end
+            if computerName ~= "" and not joining and not versionWarning and not showPrivate and not showChannels then
+                if x >= 369 and y >= 8 and y < 39 then
+                    playChatSound("game")
+                    toggleLastApp()
+                    return
+                elseif gameTab == "calculator" then calculatorClick(x, y); return
+                elseif gameTab == "settings" then
+                    if y >= 72 and y < 98 then
+                        settings.selectPage(x < 256 and "color" or "name")
+                    elseif settings.page == "color" then
+                        themes.selectAt(y)
+                    elseif y >= 226 and y < 268 then
+                        settings.saveName()
+                    end
+                    return
+                elseif gameTab == "changelog" then
+                    if y >= 414 and y < 454 then
+                        if x < 136 then changelogPage = math.min(#CHANGELOG, changelogPage + 1)
+                        elseif x >= 376 then changelogPage = math.max(1, changelogPage - 1) end
+                    end
+                    return
+                elseif gameTab == "website" then
+                    if y >= 84 and y < 118 then
+                        if x >= 16 and x < 58 then stepWebsite(-1)
+                        elseif x >= 454 and x < 496 then stepWebsite(1) end
+                    elseif x >= 426 and y >= 132 and y < 202 then
+                        websiteControls.scroll(y < 167 and -96 or 96)
+                    else
+                        local px, py = (x - 96) / 0.625, (y - 132) / 0.625
+                        websiteControls.buy(px, py)
+                        local slot = math.floor((py - 154) / 74)
+                        if px >= 48 and px < 464 and slot >= 0 and slot < 3 and (py - 154) % 74 < 56 then
+                            requestWebsiteDonation(slot + 1)
+                        end
+                    end
+                    return
+                elseif gameTab == "hud" then
+                    if y >= 134 and y < 193 then showChatHUD = not showChatHUD end
+                    if y >= 426 and y < 470 then changeGameTab("menu") end
+                    return
+                elseif gameTab == "menu" then
+                    if y >= 82 and y < 114 then
+                        if x < 248 then selectMenuTab(APPS)
+                        elseif x >= 264 then selectMenuTab(GAMES) end
+                        return
+                    end
+                    local dx, dy = x - 16, y - LAUNCHER_TOP
+                    local stepX, stepY = TILE_WIDTH + TILE_GAP, TILE_HEIGHT + TILE_GAP
+                    if dy >= 0 and dx % stepX < TILE_WIDTH and dy % stepY < TILE_HEIGHT then
+                        local index = math.floor(dy / stepY) * 2 + math.floor(dx / stepX) + 1
+                        if menuOptions[index] then
+                            selectedGame = index
+                            playChatSound("game")
+                            enterSelectedGame()
+                        end
+                    end
+                    return
+                elseif gameTab then return end
+            end
+            if room ~= "" and not showPayments and not showPrivate and not showChannels then
+                if emojiOpen and x >= EMOJI_GRID_LEFT and x < EMOJI_GRID_LEFT + EMOJI_COLUMNS * 60 then
+                    local offsetX = x - EMOJI_GRID_LEFT
+                    if y >= EMOJI_CATEGORY_TOP and y < EMOJI_CATEGORY_TOP + 2 * EMOJI_CATEGORY_HEIGHT then
+                        local row = math.floor((y - EMOJI_CATEGORY_TOP) / EMOJI_CATEGORY_HEIGHT)
+                        selectEmojiCategory(row * EMOJI_CATEGORY_COLUMNS + math.floor(offsetX / EMOJI_CATEGORY_WIDTH) + 1)
+                        return
+                    elseif y >= EMOJI_GRID_TOP and y < EMOJI_GRID_TOP + EMOJI_ROWS * 46 then
+                        local row = emojiFirstRow + math.floor((y - EMOJI_GRID_TOP) / 46)
+                        local index = row * EMOJI_COLUMNS + math.floor(offsetX / 60) + 1
+                        if EMOJIS[index] and offsetX % 60 < 55 and (y - EMOJI_GRID_TOP) % 46 < 41 then
+                            selectEmoji(index)
+                            insertEmoji()
+                        end
+                        return
+                    end
+                end
+                if not gameTab and x >= 370 and y >= 419 and y < 457 then
+                    emojiOpen = not emojiOpen
+                    return
+                elseif emojiOpen then return end
+            end
+            return
+        end
+        themes.selectAt(y)
+    end)
+
+    net.receive("room_games_state", function()
+        local snapshot = net.readTable()
+        if snapshot.variant ~= gameWatchTab then return end
+        if snapshot.current or snapshot.notice ~= "" then gameEntryUntil = nil end
+        if snapshot.notice ~= "" then gameStatus = snapshot.notice
+        elseif snapshot.current or snapshot.clearNotice then gameStatus = "" end
+        if not snapshot.changed then return end
+        local incoming = snapshot.current
+        if poweredOn and gameTab == gameWatchTab and currentGame and incoming and currentGame.id == incoming.id then
+            if gameTab == "chess" and incoming.board ~= currentGame.board and (incoming.ply or 0) > (currentGame.ply or 0) then
+                playChatSound("chess")
+            elseif gameTab == "tic" and incoming.board ~= currentGame.board and incoming.board ~= "........." then
+                playChatSound("tic")
+            elseif gameTab == "battleship" and incoming.lastShot ~= ""
+                and (incoming.target ~= currentGame.target or incoming.fleet ~= currentGame.fleet) then
+                local hit = incoming.lastShotHit
+                if hit == nil then hit = incoming.lastShot:find(" hit ", 1, true) ~= nil end
+                playChatSound(hit and "explosion" or "splash")
+            end
+        end
+        local selection = matches[selectedMatch]
+        if currentGame and not snapshot.current and snapshot.notice == "" then gameStatus = "Match closed." end
+        if gameWatchTab == "chess" then
+            if not currentGame or not incoming or incoming.id ~= currentGame.id
+                or (incoming.ply or 0) < (currentGame.ply or 0) then
+                chessMoveScroll = 0
+                chessCursor = incoming and incoming.mark == "O" and 5 or 61
+            end
+            if not currentGame or not incoming or incoming.id ~= currentGame.id or incoming.board ~= currentGame.board then
+                chessFrom, chessPromotion, chessHints = nil, false, {}
+            end
+        end
+        matches, currentGame = snapshot.matches, snapshot.current
+        selectedMatch = 1
+        for i, match in ipairs(matches) do
+            if selection and selection.id == match.id then selectedMatch = i end
+        end
+    end)
+
+    net.receive("room_chess_hints", function()
+        local result = net.readTable()
+        if gameTab ~= "chess" or not currentGame or result.id ~= currentGame.id
+            or result.board ~= currentGame.board or result.from ~= chessFrom then return end
+        chessHints = {}
+        for _, square in ipairs(result.hints) do chessHints[square] = true end
+    end)
+
+    net.receive("room_directory", function()
+        directoryReceived = true
+        directoryDetail = net.readString()
+        local selectedId = directory[selected] and directory[selected].id
+        directory = {}
+        selected = 1
+        for i = 1, net.readUInt(8) do
+            local id, name = net.readUInt(16), net.readString()
+            local passwordRequired, version = net.readBool(), net.readString()
+            directory[i] = {id = id, name = name, passwordRequired = passwordRequired, version = version}
+            if id == selectedId then selected = i end
+        end
+        if versionWarning then
+            local entry = directory[selected]
+            if not entry or entry.id ~= versionWarning.id or entry.version ~= versionWarning.version then
+                versionWarning = nil
+            end
+        end
+    end)
+
+    net.receive("room_rename_result", function()
+        local result, name = net.readString(), net.readString()
+        settings.waiting = nil
+        if result == "ok" then
+            computerName, settings.name, settings.message = name, name, "Name saved."
+        else
+            settings.message = result
+        end
+    end)
+
+    net.receive("room_join_result", function()
+        local result = net.readString()
+        if not joinUntil then return end
+        joinUntil = nil
+        if result == "ok" then
+            joining, status = nil, ""
+        else
+            if not keyboardActive then joining = nil end
+            status = result
+        end
+    end)
+
+    net.receive("room_history", function()
+        local newRoom = net.readString()
+        roomVersion = net.readString()
+        if newRoom ~= "" then directoryReceived = true end
+        if newRoom ~= room then
+            scroll, draft, status, waitingUntil = 0, "", "", nil
+            joining, password, joinUntil, versionWarning = nil, "", nil, nil
+            lastSequence, activeAlert = nil, nil
+            showPayments, paymentReview, paymentWaiting = false, nil, nil
+            showPrivate, privateWaiting, privateDraft, privateStatus = false, nil, "", ""
+            showChannels, channelWaiting, channelNames, selectedChannel = false, nil, {}, 1
+            channelIds = {}
+            emojiOpen = false
+            privateRecipients, privateRows, privateSelection, privateScroll = {}, {}, 0, 0
+            paymentRecipients, paymentSelection, paymentAmount, paymentStatus = {}, 1, "", ""
+            if MULTIPLAYER_TABS[gameTab] or gameTab == "payments" then gameTab = nil end
+            matches, currentGame, selectedMatch, gameStatus = {}, nil, 1, ""
+            gameWatchTab, gameEntryUntil = nil, nil
+        end
+        room = newRoom
+        rows = {}
+        local count = net.readUInt(5)
+        local alerts = {}
+        local mentions = {}
+        for i = 1, count do
+            local message = net.readString()
+            local isAlert = net.readBool()
+            local mentioned = not isAlert and messageMentions(message, computerName)
+            if isAlert then alerts[i] = message end
+            if mentioned then mentions[i] = message end
+            for _, line in ipairs(wrapText(message, 468, emojiFont)) do
+                rows[#rows + 1] = {text = line, alert = isAlert, mention = mentioned, face = emojiFont}
+            end
+        end
+        local notice = net.readString()
+        if notice ~= "" then status = notice end
+        local newSequence = net.readUInt(32)
+        local newChannel = net.readString()
+        if newChannel ~= channelName then
+            channelName = newChannel
+            lastSequence, activeAlert, scroll, draft = nil, nil, 0, ""
+            showChannels, channelWaiting, status = false, nil, ""
+        end
+        if lastSequence and newSequence > lastSequence then
+            local firstNew = math.max(1, count - (newSequence - lastSequence) + 1)
+            for i = count, firstNew, -1 do
+                if alerts[i] then
+                    activeAlert = wrapText(alerts[i]:sub(9), 340, smallFont)[1]
+                    alertUntil = timer.curtime() + 6
+                    break
+                end
+            end
+            for i = count, firstNew, -1 do
+                if mentions[i] then
+                    activeAlert = "Mention from " .. mentions[i]:sub(1, mentions[i]:find(": ", 1, true) - 1)
+                    alertUntil = timer.curtime() + 6
+                    playChatSound("mention")
+                    break
+                end
+            end
+        end
+        lastSequence = newSequence
+        scroll = math.min(scroll, math.max(0, #rows - ROWS_VISIBLE))
+    end)
+
+    timer.create("chatroom_directory_request", 1, 0, function()
+        if directoryReceived then
+            timer.remove("chatroom_directory_request")
+            return
+        end
+        if net.getBytesLeft() < 40 then return end
+        net.start("room_directory_request")
+        net.send()
+    end)
+
+    net.receive("room_keyboard", function()
+        keyboardActive = net.readBool()
+        local powered = net.readBool()
+        if powered ~= poweredOn then
+            poweredOn = powered
+            startupUntil = powered and timer.curtime() + themes.startupDuration or 0
+            if gameTab == "website" then
+                if poweredOn then startWebsitePolling()
+                else
+                    timer.remove("room_website_refresh")
+                    timer.remove("room_website_screen_refresh")
+                    websiteFrame, websiteFrameSite = nil, nil
+                end
+            elseif poweredOn and MULTIPLAYER_TABS[gameTab] then
+                sendGameAction(1, MULTIPLAYER_TABS[gameTab])
+            end
+        end
+        if keyboardActive then return end
+        versionWarning = nil
+        password = ""
+        if not joinUntil then joining = nil end
+    end)
+
+    net.receive("room_result", function()
+        if not waitingUntil then return end
+        waitingUntil = nil
+        local result = net.readString()
+        if result == "ok" then
+            draft, status, scroll = "", "", 0
+        else
+            status = result
+        end
+    end)
+
+    hook.add("think", "chatroom_focus", function()
+        if channelWaiting and timer.curtime() >= channelWaiting then
+            channelWaiting, channelStatus = nil, "No reply. Press R to refresh."
+        end
+        if privateWaiting and timer.curtime() >= privateWaiting then
+            privateWaiting, privateStatus = nil, "Delivery not confirmed."
+        end
+        if paymentWaiting and timer.curtime() >= paymentWaiting then
+            local confirming = paymentReview ~= nil
+            paymentWaiting, paymentReview = nil, nil
+            paymentStatus = confirming and "No response. Check for an in-game payment prompt."
+                or "Payment review timed out. Try again."
+        end
+        if settings.waiting and timer.curtime() >= settings.waiting then
+            settings.waiting, settings.message = nil, "No name change confirmation. Try again."
+        end
+        if poweredOn and gameTab == "mines" and mineSearch and not mineSearch() then mineSearch = nil end
+        if waitingUntil and timer.curtime() >= waitingUntil then
+            waitingUntil = nil
+            status = "Delivery was not confirmed."
+        end
+        if joinUntil and timer.curtime() >= joinUntil then
+            joinUntil = nil
+            if not keyboardActive then joining = nil end
+            status = "Join request timed out."
+        end
+    end)
+    local function submitJoin(entry, value)
+        if net.getBytesLeft() < #value + #computerName + 32 then
+            status = "Connection busy. Try again shortly."
+            return
+        end
+        joinUntil = timer.curtime() + 5
+        status = entry.passwordRequired and "Checking password..." or "Joining..."
+        net.start("room_join")
+        net.writeUInt(entry.id, 16)
+        net.writeString(value)
+        net.writeString(computerName)
+        password = ""
+        net.send()
+    end
+
+    local function joinSelected(entry)
+        if entry.passwordRequired then
+            joining, password, status = entry, "", ""
+        else
+            submitJoin(entry, "")
+        end
+    end
+
+    local function handleGameKey(key, enter, character)
+        if gameTab == "calculator" then calculatorKey(key, enter); return end
+        if gameTab == "settings" then
+            if key == 19 then settings.selectPage("color")
+            elseif key == 20 then settings.selectPage("name")
+            elseif settings.page == "color" then
+                if key == 17 then settings.theme = math.max(1, settings.theme - 1)
+                elseif key == 18 then settings.theme = math.min(#themes, settings.theme + 1)
+                elseif enter then applyTheme() end
+            elseif not settings.waiting then
+                if enter then settings.saveName()
+                elseif key == 8 or key == 127 then settings.name = settings.name:sub(1, -2)
+                elseif character and #settings.name < 24 and character:match("^[A-Za-z0-9_-]$") then
+                    settings.name = settings.name .. character
+                end
+            end
+            return
+        end
+        if gameTab == "changelog" then
+            if key == 19 or key == 151 then changelogPage = math.min(#CHANGELOG, changelogPage + 1)
+            elseif key == 20 or key == 152 then changelogPage = math.max(1, changelogPage - 1)
+            elseif key == 8 or key == 127 then changeGameTab("menu") end
+            return
+        end
+        if gameTab == "website" then
+            local page = websitePages[selectedWebsite]
+            local scrollable = page and page.height and page.height > 512
+            if key == 19 or (key == 17 and not scrollable) then stepWebsite(-1)
+            elseif key == 20 or (key == 18 and not scrollable) then stepWebsite(1)
+            elseif key == 17 then websiteControls.scroll(-64)
+            elseif key == 18 then websiteControls.scroll(64)
+            elseif key == 151 then websiteControls.scroll(-320)
+            elseif key == 152 then websiteControls.scroll(320)
+            elseif enter then websiteControls.buy()
+            elseif key >= 49 and key <= 51 then requestWebsiteDonation(key - 48)
+            elseif key == 8 or key == 127 then changeGameTab("menu") end
+            return
+        end
+        if gameTab == "hud" then
+            if enter then showChatHUD = not showChatHUD
+            elseif key == 8 or key == 127 then changeGameTab("menu") end
+            return
+        end
+        if gameTab == "payments" then
+            if key == 168 then changeGameTab("menu")
+            else handlePayment(key, enter) end
+            return
+        end
+        if gameTab == "menu" then
+            if selectedGame == 0 then
+                if key == 19 then selectMenuTab(APPS)
+                elseif key == 20 then selectMenuTab(GAMES)
+                elseif key == 18 or enter then selectedGame = 1 end
+            elseif key == 19 and selectedGame % 2 == 0 then selectedGame = selectedGame - 1
+            elseif key == 20 and selectedGame % 2 == 1 and menuOptions[selectedGame + 1] then selectedGame = selectedGame + 1
+            elseif key == 17 then selectedGame = math.max(0, selectedGame - 2)
+            elseif key == 18 and menuOptions[selectedGame + 2] then selectedGame = selectedGame + 2
+            elseif enter then enterSelectedGame() end
+            return
+        end
+        if gameTab == "mines" then
+            if key == 8 or key == 127 then changeGameTab("menu")
+            else handleMines(key, enter) end
+            return
+        end
+        if MULTIPLAYER_TABS[gameTab] then
+            if currentGame then
+                if (key == 8 or key == 127) and not chessPromotion then
+                    sendGameAction(5)
+                elseif character and character:lower() == "r" and currentGame.winner ~= "" then
+                    sendGameAction(6)
+                elseif gameTab == "chess" then
+                    handleChess(key, enter, character)
+                elseif gameTab == "battleship" then
+                    handleBattleship(key, enter)
+                elseif gameTab == "trail" then
+                    handleTrail(key, enter, character)
+                elseif key >= 49 and key <= 57 then
+                    sendGameAction(4, key - 48)
+                end
+            elseif key == 8 or key == 127 then
+                changeGameTab("menu")
+            elseif key == 17 then
+                selectedMatch = math.max(1, selectedMatch - 1)
+            elseif key == 18 then
+                selectedMatch = math.max(1, math.min(#matches, selectedMatch + 1))
+            elseif character and character:lower() == "c" then
+                if sendGameAction(2) then gameEntryUntil = timer.curtime() + 5 end
+            elseif enter and matches[selectedMatch] then
+                if sendGameAction(3, matches[selectedMatch].id) then gameEntryUntil = timer.curtime() + 5 end
+            end
+            return
+        end
+    end
+
+    local function handleKey(key)
+        local enter = key == 10 or key == 13 or key == 142
+        if not themeConfigured then
+            if key == 17 then
+                settings.theme = math.max(1, settings.theme - 1)
+            elseif key == 18 then
+                settings.theme = math.min(#themes, settings.theme + 1)
+            elseif enter then
+                applyTheme()
+            end
+            return
+        end
+        local character
+        if key >= 32 and key <= 126 then character = string.char(key) end
+        if computerName == "" then
+            if enter then
+                if nameDraft ~= "" then
+                    computerName, status = nameDraft, ""
+                else
+                    status = "Enter a computer name first."
+                end
+            elseif key == 127 or key == 8 then
+                nameDraft = nameDraft:sub(1, -2)
+            elseif character and character:match("^[A-Za-z0-9_-]$") and #nameDraft < 24 then
+                nameDraft = nameDraft .. character
+            end
+            return
+        end
+        if key == 163 then
+            toggleLastApp()
+            return
+        end
+        if key == 168 and room ~= "" and not gameTab then
+            if net.getBytesLeft() >= 32 then
+                net.start("room_leave")
+                net.send()
+            end
+            return
+        end
+        if not joining and not versionWarning and not showPrivate and not showChannels then
+            if gameTab then handleGameKey(key, enter, character); return end
+        end
+        if room == "" then
+            if joinUntil then return end
+            if versionWarning then
+                if key == 164 then
+                    versionWarning = nil
+                elseif enter then
+                    local entry = directory[selected]
+                    versionWarning = nil
+                    joinSelected(entry)
+                end
+            elseif joining then
+                if key == 164 then
+                    joining, password, status = nil, "", ""
+                elseif enter and password ~= "" then
+                    submitJoin(joining, password)
+                elseif key == 127 or key == 8 then
+                    password = password:sub(1, -2)
+                else
+                    if character and #password < 64 then password = password .. character end
+                end
+            elseif key == 17 then
+                selected = math.max(1, selected - 1)
+                status = ""
+            elseif key == 18 then
+                selected = math.max(1, math.min(#directory, selected + 1))
+                status = ""
+            elseif enter and directory[selected] then
+                local entry = directory[selected]
+                local _, mismatch = versionStatus(entry.version)
+                if mismatch then
+                    versionWarning, status = entry, ""
+                else
+                    joinSelected(entry)
+                end
+            end
+            return
+        end
+        if key == 164 and not gameTab and not showPayments and not showPrivate then
+            emojiOpen = false
+            toggleChannels()
+            return
+        end
+        if not gameTab and not showPayments and not showPrivate and not showChannels
+            and handleEmojiKey(key, enter) then return end
+        if showChannels then
+            if channelWaiting then return end
+            if key == 17 then selectedChannel = math.max(1, selectedChannel - 1)
+            elseif key == 18 then selectedChannel = math.max(1, math.min(#channelNames, selectedChannel + 1))
+            elseif key == 82 or key == 114 then sendChannelAction(0)
+            elseif enter and channelIds[selectedChannel] then sendChannelAction(channelIds[selectedChannel]) end
+            return
+        end
+        if key == 167 and not gameTab and not showPayments and not privateWaiting then
+            local opening = not showPrivate
+            if sendPrivateAction(opening and 1 or 0) then showPrivate = opening end
+            return
+        end
+        if showPrivate then
+            handlePrivate(key, enter, character)
+            return
+        end
+        if key == 151 then
+            scroll = math.min(scroll + 7, math.max(0, #rows - ROWS_VISIBLE))
+        elseif key == 152 then
+            scroll = math.max(0, scroll - 7)
+        elseif waitingUntil then
+            return
+        elseif enter then
+            if draft:find("%S") then
+                if net.getBytesLeft() < #draft + 32 then
+                    status = "Connection busy. Try again shortly."
+                    return
+                end
+                waitingUntil = timer.curtime() + 5
+                status = "Sending..."
+                net.start("room_post")
+                net.writeString(draft)
+                net.send()
+            end
+        elseif key == 127 or key == 8 then
+            eraseDraftCharacter()
+        else
+            if character and #draft < 160 then draft = draft .. character end
+        end
+    end
+
+    local nextArrowSound = 0
+    net.receive("room_keys", function()
+        for i = 1, net.readUInt(9) do
+            local key = net.readUInt(8)
+            if keyboardActive and poweredOn and timer.curtime() >= startupUntil then
+                local enter = key == 10 or key == 13 or key == 142
+                local cue = enter and "enter" or (gameTab and "game" or "key")
+                handleKey(key)
+                if key < 17 or key > 20 then
+                    playChatSound(cue)
+                else
+                    local now = timer.curtime()
+                    if now >= nextArrowSound then
+                        nextArrowSound = now + 0.05
+                        playChatSound(cue)
+                    end
+                end
+            end
+        end
+    end)
+end
+
+local function renderThemeSetup()
+    if not themeConfigured then label(22, 10, "Computer setup", ink, titleFont) end
+    label(22, 47, "Choose a color preset", muted, smallFont)
+    for i, theme in ipairs(themes) do
+        local y = THEME_TOP + (i - 1) * THEME_STEP
+        local active = i == settings.theme
+        render.setColor(theme.panel)
+        render.drawRect(16, y, 480, THEME_HEIGHT)
+        render.setColor(theme.accent)
+        render.drawRect(16, y, active and 8 or 3, THEME_HEIGHT)
+        render.drawRect(438, y + 7, 34, 20)
+        label(33, y + 6, theme.name, active and theme.accent or (theme.ink or themes.defaultInk))
+        if active then label(315, y + 8, "Selected", theme.accent, smallFont) end
+    end
+    render.setColor(panel)
+    render.drawRect(16, 419, 480, 47)
+    label(26, 433, "Use " .. themes[settings.theme].name, accent)
+    label(22, 483, themeConfigured and "Left/Right tabs  |  Up/Down colors  |  Enter applies"
+        or "Aim and press E, or use Up/Down and Enter.", muted, smallFont)
+end
+
+local function renderGameMenu()
+    render.setColor(panel)
+    render.drawRect(16, 82, TILE_WIDTH, 32)
+    render.drawRect(264, 82, TILE_WIDTH, 32)
+    if selectedGame == 0 then
+        render.setColor(accent)
+        render.drawRect(menuOptions == APPS and 16 or 264, 111, TILE_WIDTH, 3)
+    end
+    label(28, 89, "Apps", menuOptions == APPS and accent or muted)
+    label(276, 89, "Games", menuOptions == GAMES and accent or muted)
+    for i, entry in ipairs(menuOptions) do
+        local slot = i - 1
+        local x = 16 + slot % 2 * (TILE_WIDTH + TILE_GAP)
+        local y = LAUNCHER_TOP + math.floor(slot / 2) * (TILE_HEIGHT + TILE_GAP)
+        local needsRoom = room == "" and (MULTIPLAYER_TABS[entry.tab] or entry.needsRoom)
+        local otherMatch = currentGame and MULTIPLAYER_TABS[entry.tab] and entry.tab ~= gameWatchTab
+        local locked = needsRoom or otherMatch
+        local selected = i == selectedGame
+        render.setColor(panel)
+        render.drawRect(x, y, TILE_WIDTH, TILE_HEIGHT)
+        if selected then
+            render.setColor(accent)
+            render.drawRect(x, y, 4, TILE_HEIGHT)
+        end
+        label(x + 14, y + 16, entry.name, locked and muted or (selected and accent or ink))
+        label(x + 14, y + 48, needsRoom and "Join a room to use" or (otherMatch and "Already in another match" or entry.detail), muted, smallFont)
+    end
+    label(22, 484, "Up to tabs  |  Left/Right switches  |  Down to tiles", muted, smallFont)
+end
+
+local function renderMines()
+    local field = minefield
+    if not field then
+        label(22, 85, "Choose a difficulty", accent)
+        for i, option in ipairs(MINE_DIFFICULTIES) do
+            local y = 123 + (i - 1) * 57
+            render.setColor(panel)
+            render.drawRect(16, y, 480, 46)
+            label(29, y + 13, (i == mineDifficulty and "> " or "  ") .. option.name
+                .. "  |  " .. option.count .. " mines", i == mineDifficulty and accent or ink)
+        end
+        label(22, 311, "No Guess: " .. (mineNoGuess and "On" or "Off"), mineNoGuess and accent or ink)
+        label(22, 343, "No Guess checks for a solution using deductions.", muted, smallFont)
+        label(22, 453, "Up/Down selects  |  Space toggles No Guess", ink, smallFont)
+        label(22, 484, "Enter starts  |  Backspace / F1 Desktop", muted, smallFont)
+        return
+    end
+    local banner = field.result
+    if field.generating then banner = "Finding a No Guess board..."
+    elseif field.searchFailed then banner = "No board found. Press Enter to search again." end
+    label(22, 82, banner or ("Flags remaining: " .. (field.count - field.flagCount)
+        .. (field.noGuess and "  |  No Guess" or "")), accent, smallFont)
+    for cell = 1, MINE_CELLS do
+        local x = 96 + (cell - 1) % MINE_SIDE * 40
+        local y = 111 + math.floor((cell - 1) / MINE_SIDE) * 40
+        local number = field.open[cell]
+        local text, color = "", ink
+        if field.result and field.mines[cell] then text, color = "*", alertColor
+        elseif field.flags[cell] then text, color = "F", alertColor
+        elseif number and number > 0 then text, color = tostring(number), accent end
+        if cell == field.cursor then
+            render.setColor(accent)
+            render.drawRect(x, y, 38, 38)
+        end
+        render.setColor(number and background or panel)
+        render.drawRect(x + 2, y + 2, 34, 34)
+        label(x + 14, y + 10, text, color)
+    end
+    label(22, 453, "Arrows move  |  Enter reveals  |  F flags", ink, smallFont)
+    label(22, 484, "R restarts  |  D difficulty  |  Backspace / F1 Desktop", muted, smallFont)
+end
+
+local function renderChessBoard(game)
+    local side = game.mark == "X" and "White" or "Black"
+    local state = "Waiting for another player..."
+    if game.winner == "draw" then state = "Stalemate."
+    elseif game.winner ~= "" then state = game.winner == game.mark and "Checkmate. You won!" or "Checkmate. You lost."
+    elseif game.guest ~= "" then
+        state = (game.turn == game.mark and "Your turn" or "Opponent's turn") .. (game.check and "  |  Check" or "")
+    end
+    label(22, 81, "Match #" .. game.id .. "  |  You are " .. side .. "  |  " .. state, accent, smallFont)
+    for tile = 1, 64 do
+        local square = orientChessSquare(tile, game.mark)
+        local column = (tile - 1) % 8
+        local row = math.floor((tile - 1) / 8)
+        local x, y = 34 + column * 36, 110 + row * 38
+        local piece = game.board:sub(square, square)
+        if square == chessCursor or square == chessFrom then
+            render.setColor(square == chessFrom and alertColor or accent)
+            render.drawRect(x, y, 35, 37)
+        end
+        render.setColor((column + row) % 2 == 0 and panel or background)
+        render.drawRect(x + 2, y + 2, 31, 33)
+        if chessHints[square] then
+            render.setColor(accent)
+            render.drawRect(x + 12, y + 27, 11, 5)
+        end
+        if piece ~= "." then
+            local white = piece == piece:upper()
+            label(x + 9, y + 11, (white and "w" or "b") .. piece:upper(), white and ink or alertColor)
+        end
+        if column == 0 then label(17, y + 10, tostring(8 - math.floor((square - 1) / 8)), muted, smallFont) end
+        if row == 7 then label(x + 14, y + 38, string.char(97 + (square - 1) % 8), muted, smallFont) end
+    end
+    render.setColor(panel)
+    render.drawRect(330, 110, 166, 306)
+    label(340, 117, "Moves", accent, smallFont)
+    local moves = game.moves or {}
+    local last = #moves - chessMoveScroll
+    local first = math.max(1, last - CHESS_MOVE_ROWS + 1)
+    for i = first, last do
+        local ply = (game.ply or #moves) - #moves + i
+        local number = math.floor((ply + 1) / 2)
+        local notation = number .. (ply % 2 == 1 and ". " or "... ") .. moves[i]
+        label(340, 138 + (i - first) * 18, notation, ink, smallFont)
+    end
+    if #moves == 0 then label(340, 138, "No moves yet", muted, smallFont) end
+    if #moves > CHESS_MOVE_ROWS then label(330, 424, "PgUp/PgDn scroll", muted, smallFont) end
+    local controls = "Arrows move  |  Enter picks or moves  |  Backspace leaves"
+    if chessPromotion then controls = "Promote to Q, R, B, or N. Backspace cancels."
+    elseif game.rematchRequested then controls = "Rematch requested. Waiting for your opponent."
+    elseif game.opponentRequested then controls = "Opponent requested a rematch. Press R to accept."
+    elseif game.winner ~= "" then controls = "R requests a rematch  |  Backspace leaves" end
+    label(22, 453, controls, ink, smallFont)
+end
+
+local function renderFleetGrid(board, x, showCursor, preview, previewColor)
+    for cell = 1, 100 do
+        local col, row = (cell - 1) % 10, math.floor((cell - 1) / 10)
+        local left, top = x + col * 21, 153 + row * 21
+        local tile = board:sub(cell, cell)
+        render.setColor(preview and preview[cell] and previewColor or panel)
+        render.drawRect(left, top, 19, 19)
+        if showCursor and cell == battleshipCursor then
+            render.setColor(accent)
+            render.drawRect(left, top, 19, 2)
+            render.drawRect(left, top + 17, 19, 2)
+            render.drawRect(left, top, 2, 19)
+            render.drawRect(left + 17, top, 2, 19)
+        end
+        if tile == "S" then label(left + 5, top + 1, "S", accent, smallFont)
+        elseif tile == "H" then label(left + 5, top + 1, "X", alertColor, smallFont)
+        elseif tile == "M" then label(left + 5, top + 1, "o", muted, smallFont) end
+        if row == 0 then label(left + 5, 132, string.char(65 + col), muted, smallFont) end
+        if col == 0 then label(x - 19, top + 1, tostring(row + 1), muted, smallFont) end
+    end
+end
+
+local function renderBattleship(game)
+    local state = "Waiting for another player..."
+    local placing = game.ready == false
+    if game.winner ~= "" then state = game.winner == game.mark and "You won!" or "Your fleet was sunk."
+    elseif placing then
+        if game.nextShip > 0 then state = "Place your fleet  |  " .. game.placed .. "/5"
+        elseif game.guest == "" then state = "Fleet ready. Waiting for another player."
+        else state = "Fleet ready. Waiting for your opponent." end
+    elseif game.guest ~= "" then state = game.turn == game.mark and "Your turn" or "Opponent's turn" end
+    label(22, 81, "Match #" .. game.id .. "  |  " .. state, accent, smallFont)
+    label(39, 108, "Your fleet", ink, smallFont)
+    label(285, 108, "Target grid", ink, smallFont)
+    local preview, previewColor
+    if placing and game.nextShip > 0 then
+        preview = {}
+        local step = battleshipVertical and 10 or 1
+        local edge = battleshipVertical and math.floor((battleshipCursor - 1) / 10) or (battleshipCursor - 1) % 10
+        local valid = edge + game.nextShip <= 10
+        for i = 0, math.min(game.nextShip, 10 - edge) - 1 do
+            local square = battleshipCursor + i * step
+            preview[square] = true
+            if game.fleet:sub(square, square) == "S" then valid = false end
+        end
+        previewColor = valid and accent or alertColor
+    end
+    renderFleetGrid(game.fleet, 37, placing, preview, previewColor)
+    renderFleetGrid(game.target, 279, not placing)
+    label(22, 382, "S ship  |  X hit  |  o miss", muted, smallFont)
+    if placing then
+        if game.nextShip > 0 then
+            label(22, 409, "Next ship: " .. game.nextShip .. " cells  |  "
+                .. (battleshipVertical and "Vertical" or "Horizontal"), ink, smallFont)
+        end
+    else
+        local tracker = "Hits: " .. game.hits .. "/17"
+        if game.sunk ~= nil then tracker = tracker .. "  |  Sunk: " .. game.sunk .. "/5" end
+        label(289, 382, tracker, accent, smallFont)
+        label(22, 409, game.lastShot, ink, smallFont)
+    end
+    local controls = "Arrows aim  |  Enter fires  |  Backspace leaves"
+    if placing then controls = "Arrows move  |  Enter places  |  R rotates  |  U undoes"
+    elseif game.rematchRequested then controls = "Rematch requested. Waiting for your opponent."
+    elseif game.opponentRequested then controls = "Opponent requested a rematch. Press R to accept."
+    elseif game.winner ~= "" then controls = "R requests a rematch  |  Backspace leaves" end
+    label(22, 453, controls, ink, smallFont)
+end
+
+local function renderTrailGame(game)
+    local state = game.trail
+    if not state then
+        label(22, 85, "Expedition #" .. game.id .. "  |  " .. #game.party .. "/4 players", accent)
+        for i, name in ipairs(game.party) do label(22, 122 + (i - 1) * 29, name, ink) end
+        label(22, 453, game.isHost and "S starts the expedition  |  Backspace leaves"
+            or "Waiting for the host to start  |  Backspace leaves", muted, smallFont)
+        return
+    end
+    local turn = game.canMove and "Your turn" or (game.controller .. "'s turn")
+    label(22, 84, "Day " .. state.day .. "  |  " .. game.destination .. "  |  " .. turn, accent, smallFont)
+    render.setColor(panel)
+    render.drawRect(16, 111, 480, 66)
+    label(26, 119, state.miles .. " / 2,000 miles", accent)
+    label(26, 146, "Food " .. state.food .. "  |  Health " .. math.max(0, state.health)
+        .. "  |  Wagon " .. math.max(0, state.wagon) .. "  |  $" .. state.money, ink, smallFont)
+    for i, line in ipairs(wrapText(state.event, 454, font)) do label(22, 193 + (i - 1) * 20, line, ink) end
+    if state.result then
+        label(22, 288, state.result, accent, titleFont)
+        label(22, 453, game.voted and ("Rematch votes: " .. game.votes .. "/" .. #game.party)
+            or "R votes for a new expedition  |  Backspace leaves", ink, smallFont)
+        return
+    end
+    for i, choice in ipairs(game.choices) do
+        local y = 266 + (i - 1) * 39
+        render.setColor(panel)
+        render.drawRect(16, y, 480, 32)
+        local selected = i == math.min(trailChoice, #game.choices)
+        label(26, y + 7, (selected and "> " or "  ") .. choice, selected and accent or ink)
+    end
+    label(22, 453, "Up/Down selects  |  Enter acts on your turn  |  Backspace leaves", ink, smallFont)
+end
+
+local function renderMatchTab()
+    if not currentGame then
+        label(22, 86, "Matches", accent)
+        if #matches == 0 then label(22, 124, "No matches yet.", muted) end
+        local first = math.max(1, selectedMatch - 9)
+        for i = first, math.min(#matches, first + 9) do
+            local match = matches[i]
+            local y = 117 + (i - first) * 31
+            if i == selectedMatch then
+                render.setColor(panel)
+                render.drawRect(16, y - 2, 480, 27)
+            end
+            label(22, y, "#" .. match.id .. "  " .. match.host, i == selectedMatch and accent or ink)
+            local state = match.open and "Open" or "In use"
+            if match.players then state = match.players .. "/4  " .. state end
+            label(379, y, state, muted, smallFont)
+        end
+        label(22, 453, "C creates a match  |  Up/Down selects  |  Enter joins", ink, smallFont)
+    elseif gameTab == "chess" then
+        renderChessBoard(currentGame)
+    elseif gameTab == "battleship" then
+        renderBattleship(currentGame)
+    elseif gameTab == "trail" then
+        renderTrailGame(currentGame)
+    else
+        local game = currentGame
+        local opponent = game.mark == "X" and game.guest or game.host
+        local turn = "Waiting for another player..."
+        if game.winner == "draw" then turn = "Draw."
+        elseif game.winner ~= "" then turn = game.winner == game.mark and "You won!" or "You lost."
+        elseif opponent ~= "" then turn = game.turn == game.mark and "Your turn" or ("Waiting for " .. opponent) end
+        label(22, 82, "Match #" .. game.id .. "  |  You are " .. game.mark, ink, smallFont)
+        label(22, 107, turn, accent)
+        for square = 1, 9 do
+            local x = 121 + ((square - 1) % 3) * 91
+            local y = 142 + math.floor((square - 1) / 3) * 91
+            local mark = game.board:sub(square, square)
+            render.setColor(panel)
+            render.drawRect(x, y, 87, 87)
+            label(x + 33, y + 24, mark == "." and tostring(square) or mark,
+                mark == "." and muted or accent, titleFont)
+        end
+        local controls = "1–9 places a mark  |  Backspace leaves the match"
+        if game.rematchRequested then controls = "Rematch requested. Waiting for your opponent."
+        elseif game.opponentRequested then controls = "Opponent requested a rematch. Press R to accept."
+        elseif game.winner ~= "" then controls = "R requests a rematch  |  Backspace leaves the match" end
+        label(22, 453, controls, ink, smallFont)
+    end
+    local hint = currentGame and "F1 Desktop" or "Backspace / F1 Desktop"
+    label(22, 484, gameStatus ~= "" and gameStatus or hint, muted, smallFont)
+end
+
+local function renderChannels()
+    label(22, 46, "Current: # " .. channelName, muted, smallFont)
+    for i, name in ipairs(channelNames) do
+        local y = 86 + (i - 1) * 29
+        if i == selectedChannel then
+            render.setColor(panel)
+            render.drawRect(16, y - 2, 480, 25)
+        end
+        label(22, y, (i == selectedChannel and "> # " or "  # ") .. name, i == selectedChannel and accent or ink)
+    end
+    label(22, 450, "Up/Down selects  |  Enter joins  |  R refreshes", ink, smallFont)
+    label(22, 481, channelStatus ~= "" and channelStatus or "F2 closes Channels  |  F1 Desktop", muted, smallFont)
+end
+
+local function renderPrivate()
+    label(22, 46, "Choose a recipient with Up or Down", muted, smallFont)
+    if #privateRecipients == 0 then label(22, 86, "No connected recipients.", muted) end
+    local first = math.max(1, privateSelection - 4)
+    for i = first, math.min(#privateRecipients, first + 4) do
+        local selected = i == privateSelection
+        label(22, 84 + (i - first) * 24, (selected and "> " or "  ") .. privateRecipients[i].name,
+            selected and accent or ink)
+    end
+    label(22, 211, "Recent private messages", accent, smallFont)
+    local last = #privateRows - privateScroll
+    local firstLine = math.max(1, last - 5)
+    for i = firstLine, last do label(22, 235 + (i - firstLine) * 20, privateRows[i], ink, emojiFont) end
+    render.setColor(panel)
+    render.drawRect(16, 365, 480, 91)
+    local target = privateRecipients[privateSelection]
+    local prefix = target and ("To " .. target.name .. ": ") or "> "
+    local lines = wrapText(prefix .. privateDraft .. "_", 455, emojiFont)
+    local firstDraft = math.max(1, #lines - 3)
+    for i = firstDraft, #lines do label(26, 371 + (i - firstDraft) * 19, lines[i], accent, emojiFont) end
+    label(22, 465, "Enter sends privately  |  PgUp/PgDn scroll  |  F5 room chat", muted, smallFont)
+    if privateStatus ~= "" then label(22, 487, privateStatus, muted, smallFont) end
+end
+
+local function renderPayments()
+    label(22, 46, "Send in-game money", muted, smallFont)
+    if paymentReview then
+        label(22, 105, "Confirm payment", accent, titleFont)
+        for i, line in ipairs(wrapText("To: " .. paymentReview.name, 460, font)) do
+            label(22, 157 + (i - 1) * 20, line, ink)
+        end
+        label(22, 213, "Amount: $" .. paymentReview.amount, ink)
+        label(22, 439, "Enter opens payment prompt  |  Backspace edits", accent, smallFont)
+    else
+        label(22, 81, "Select a recipient", accent, smallFont)
+        if #paymentRecipients == 0 and paymentStatus == "" then
+            label(22, 108, "No other players are connected.", muted, smallFont)
+        end
+        local first = math.max(1, paymentSelection - 6)
+        for i = first, math.min(#paymentRecipients, first + 6) do
+            local entry = paymentRecipients[i]
+            local y = 106 + (i - first) * 35
+            local selected = i == paymentSelection
+            if selected then
+                render.setColor(panel)
+                render.drawRect(16, y - 2, 480, 31)
+            end
+            label(22, y, (selected and "> " or "  ") .. entry.name, selected and accent or ink)
+            label(297, y + 1, entry.playerName:sub(1, 22), muted, smallFont)
+        end
+        render.setColor(panel)
+        render.drawRect(16, 367, 480, 47)
+        label(25, 380, "Amount: $" .. paymentAmount .. "_", accent)
+        label(22, 433, "Up/Down selects  |  Type amount  |  Enter reviews", ink, smallFont)
+        label(22, 455, "R refreshes recipients  |  F6 returns to Apps", muted, smallFont)
+    end
+    if paymentStatus ~= "" then label(22, 483, paymentStatus, muted, smallFont) end
+end
+
+local function renderCalculator()
+    render.setColor(panel)
+    render.drawRect(16, 85, 480, 52)
+    local state = calculator
+    local value = state.left and (string.format("%.10g", state.left) .. " " .. state.operator .. " " .. state.entry)
+        or (state.entry ~= "" and state.entry or "0")
+    label(26, 100, state.error or value, state.error and alertColor or ink)
+    label(380, 151, "Clear  C", accent, smallFont)
+    for i, key in ipairs(CALCULATOR_KEYS) do
+        local x, y = 16 + (i - 1) % 4 * 120, 184 + math.floor((i - 1) / 4) * 56
+        render.setColor(panel)
+        render.drawRect(x, y, 113, 49)
+        label(x + 48, y + 12, key, key == "=" and accent or ink)
+    end
+    render.setColor(panel)
+    render.drawRect(369, 426, 127, 44)
+    label(381, 438, "Desktop  F1", accent, smallFont)
+    label(22, 483, "Press E on buttons or use the Wiremod Keyboard.", muted, smallFont)
+end
+
+local websiteFonts, websiteFontCount = {}, 0
+local function websiteFont(page)
+    if page.face == "" then return smallFont end
+    local size = math.max(8, math.floor(page.size * 0.625 + 0.5))
+    local key = page.face .. "|" .. size .. "|" .. page.weight
+    if websiteFonts[key] then return websiteFonts[key] end
+    if websiteFontCount >= 16 then return smallFont end
+    local ok, face = pcall(render.createFont, page.face, size, page.weight)
+    websiteFontCount = websiteFontCount + 1
+    websiteFonts[key] = ok and face or smallFont
+    return websiteFonts[key]
+end
+
+local function drawWebsiteFrame(frame, face, scroll)
+    scroll = scroll or 0
+    local scale = 0.625
+    local left, top = 96, 132
+    for _, command in ipairs(frame) do
+        if type(command) == "table" then
+            local kind, x, y, w, h, r, g, b, value = unpack(command, 1, 9)
+            if type(x) == "number" and type(y) == "number" and type(w) == "number" and type(h) == "number"
+                and x >= 0 and y >= 0 and w >= 0 and h >= 0 and x + w <= 512 and y + h <= 1023
+                and type(r) == "number" and r >= 0 and r <= 255
+                and type(g) == "number" and g >= 0 and g <= 255
+                and type(b) == "number" and b >= 0 and b <= 255 then
+                y = y - scroll
+                local color = Color(r, g, b)
+                if kind == "rect" then
+                    local first, last = math.max(0, y), math.min(512, y + h)
+                    if last > first then
+                        render.setColor(color)
+                        render.drawRect(left + x * scale, top + first * scale, w * scale, (last - first) * scale)
+                    end
+                elseif kind == "text" and y >= 0 and y + h <= 512 and type(value) == "string" and #value <= 96 then
+                    for _, line in ipairs(wrapText(value, w * scale, face)) do
+                        label(left + x * scale, top + y * scale, line, color, face)
+                        break
+                    end
+                end
+            end
+        end
+    end
+end
+
+local function websiteDemoFrame(page, now)
+    local progress = (now % 4) / 4
+    local frame = {
+        {"rect", 0, 0, 512, 512, 19, 27, 42},
+        {"rect", 0, 0, 512, 82, 33, 54, 77},
+        {"text", 24, 24, 464, 36, 234, 245, 255, page.title},
+        {"rect", 24, 330, 464, 102, 33, 54, 77},
+        {"rect", 40, 391, 432, 15, 19, 27, 42},
+        {"rect", 40, 391, 432 * progress, 15, 56, 200, 223},
+        {"rect", 40 + 400 * progress, 372, 32, 12, 255, 187, 98},
+        {"text", 40, 340, 432, 30, 198, 222, 239, "Live animation"},
+        {"text", 24, 462, 464, 32, 198, 222, 239, "Uptime: " .. math.floor(now) .. "s"}
+    }
+    for i, line in ipairs(page.lines) do
+        frame[#frame + 1] = {"text", 24, 105 + (i - 1) * 40, 464, 36, 198, 222, 239, line}
+    end
+    return frame
+end
+
+local function websiteDonationFrame(page)
+    local frame = {
+        {"rect", 0, 0, 512, 512, 19, 27, 42},
+        {"rect", 0, 0, 512, 82, 33, 54, 77},
+        {"text", 24, 24, 464, 36, 234, 245, 255, page.title},
+        {"text", 48, 105, 416, 32, 198, 222, 239, page.lines[1] or ""},
+        {"text", 48, 401, 416, 32, 198, 222, 239, "Press E on an amount to donate."},
+        {"text", 48, 440, 416, 32, 198, 222, 239, "Confirm in the in-game payment prompt."}
+    }
+    for i, amount in ipairs(page.amounts) do
+        if amount > 0 then
+            local y = 154 + (i - 1) * 74
+            frame[#frame + 1] = {"rect", 48, y, 416, 56, 29, 100, 98}
+            frame[#frame + 1] = {"text", 64, y + 14, 380, 32, 234, 245, 255, "Donate $" .. amount}
+        end
+    end
+    return frame
+end
+
+local function renderWebsite()
+    local page = websitePages[selectedWebsite]
+    render.setColor(panel)
+    render.drawRect(16, 84, 480, 34)
+    label(28, 91, "<", #websitePages > 1 and accent or muted)
+    label(465, 91, ">", #websitePages > 1 and accent or muted)
+    local siteLabel = websiteLoaded and "No website chips found" or "Looking for website chips..."
+    if page then
+        siteLabel = page.name .. "  #" .. page.id .. "  (" .. selectedWebsite .. "/" .. #websitePages .. ")"
+    end
+    label(64, 93, siteLabel, ink, smallFont)
+    if page and page.donation then
+        drawWebsiteFrame(websiteDonationFrame(page), websiteFont(page))
+    elseif page and page.demo then
+        drawWebsiteFrame(websiteDemoFrame(page, math.max(0, timer.curtime() - page.startedAt)), websiteFont(page))
+    elseif page and websiteFrameSite == page.id and websiteFrame then
+        drawWebsiteFrame(websiteFrame, websiteFont(page), page.scroll)
+    elseif page and page.title then
+        render.setColor(Color(19, 27, 42))
+        render.drawRect(40, 143, 432, 270)
+        render.setColor(Color(33, 54, 77))
+        render.drawRect(40, 143, 432, 55)
+        for i, line in ipairs(wrapText(page.title, 396, websiteFont(page))) do
+            label(58, 149 + (i - 1) * 21, line, Color(234, 245, 255), websiteFont(page))
+        end
+        for i, line in ipairs(page.lines) do
+            for j, part in ipairs(wrapText(line, 396, websiteFont(page))) do
+                label(58, 208 + (i - 1) * 38 + (j - 1) * 17, part, Color(198, 222, 239), websiteFont(page))
+            end
+        end
+    end
+    label(22, 460, "animations and other features might be laggy and or not work", alertColor, smallFont)
+    if page and not page.title then label(64, 162, "Loading selected site...", muted, smallFont) end
+    local hint = "Arrows switch sites  |  Backspace Apps"
+    if page and page.height and page.height > 512 then
+        render.setColor(panel)
+        render.drawRect(426, 132, 54, 34)
+        render.drawRect(426, 168, 54, 34)
+        label(438, 140, "Up", accent, smallFont)
+        label(434, 176, "Down", accent, smallFont)
+        hint = "Up/Down scrolls  |  Left/Right switches sites"
+    elseif page and page.donation then
+        hint = "Press E on an amount or use 1-3."
+    end
+    if websiteControls.message ~= "" then hint = websiteControls.message end
+    label(22, 483, hint, muted, smallFont)
+end
+
+local function renderChangelog()
+    local entry = CHANGELOG[changelogPage]
+    if renderedChangelogPage ~= changelogPage then
+        changelogRows = wrapText(entry[2], 440, font)
+        renderedChangelogPage = changelogPage
+    end
+    render.setColor(panel)
+    render.drawRect(16, 86, 480, 310)
+    label(32, 105, entry[1], accent, titleFont)
+    for i, line in ipairs(changelogRows) do
+        label(32, 161 + (i - 1) * 22, line, ink)
+    end
+    render.setColor(panel)
+    render.drawRect(16, 414, 120, 40)
+    render.drawRect(376, 414, 120, 40)
+    label(30, 425, "< Older", changelogPage < #CHANGELOG and accent or muted)
+    label(390, 425, "Newer >", changelogPage > 1 and accent or muted)
+    label(220, 426, changelogPage .. " / " .. #CHANGELOG, muted, smallFont)
+    label(22, 483, "Left/Right or PgUp/PgDn changes release  |  F1 Desktop", muted, smallFont)
+end
+
+local function renderAppsPanel()
+    if MULTIPLAYER_TABS[gameTab] and activeAlert and timer.curtime() < alertUntil then
+        label(22, 46, activeAlert, alertColor, smallFont)
+    end
+    if gameTab == "menu" then renderGameMenu()
+    elseif gameTab == "calculator" then renderCalculator()
+    elseif gameTab == "website" then renderWebsite()
+    elseif gameTab == "changelog" then renderChangelog()
+    elseif gameTab == "settings" then
+        render.setColor(panel)
+        render.drawRect(16, 72, 232, 26)
+        render.drawRect(264, 72, 232, 26)
+        label(28, 77, "Color", settings.page == "color" and accent or muted, smallFont)
+        label(276, 77, "Computer name", settings.page == "name" and accent or muted, smallFont)
+        if settings.page == "color" then
+            renderThemeSetup()
+        else
+            label(22, 122, "Current name: " .. computerName, ink)
+            render.setColor(panel)
+            render.drawRect(16, 161, 480, 46)
+            render.drawRect(16, 226, 160, 42)
+            label(28, 174, settings.name .. "_", accent)
+            label(28, 236, "Save name", accent)
+            label(22, 285, settings.message, muted, smallFont)
+            label(22, 483, "Left/Right tabs  |  Type a name  |  Enter saves", muted, smallFont)
+        end
+    elseif gameTab == "hud" then
+        label(22, 85, "Chat overlay", accent, titleFont)
+        render.setColor(panel)
+        render.drawRect(16, 134, 480, 59)
+        label(28, 154, showChatHUD and "HUD on" or "HUD off", accent)
+        label(22, 217, "Connect to the linked Starfall HUD to see room chat.", muted, smallFont)
+        label(22, 244, "Press Enter or aim at the toggle and press E.", muted, smallFont)
+        label(381, 438, "Back to Apps", accent, smallFont)
+        label(22, 483, "Backspace returns to Apps.", muted, smallFont)
+    elseif gameTab == "payments" then renderPayments()
+    elseif gameTab == "mines" then renderMines()
+    else renderMatchTab() end
+end
+
+local function renderEmojiPicker()
+    render.setColor(background)
+    render.drawRect(370, 419, 122, 38)
+    label(379, 429, emojiOpen and "Close emoji" or "Emoji  F4", accent, smallFont)
+    if emojiOpen then
+        for index, category in ipairs(emojiCategories) do
+            local slot = index - 1
+            local x = EMOJI_GRID_LEFT + slot % EMOJI_CATEGORY_COLUMNS * EMOJI_CATEGORY_WIDTH
+            local y = EMOJI_CATEGORY_TOP + math.floor(slot / EMOJI_CATEGORY_COLUMNS) * EMOJI_CATEGORY_HEIGHT
+            render.setColor(panel)
+            render.drawRect(x, y, EMOJI_CATEGORY_WIDTH - 4, EMOJI_CATEGORY_HEIGHT - 3)
+            label(x + 5, y + 2, index .. " " .. category[1], index == emojiCategory and accent or ink, smallFont)
+        end
+        local first = emojiFirstRow * EMOJI_COLUMNS + 1
+        local last = math.min(#EMOJIS, first + EMOJI_COLUMNS * EMOJI_ROWS - 1)
+        for i = first, last do
+            local slot = i - first
+            local x = EMOJI_GRID_LEFT + slot % EMOJI_COLUMNS * 60
+            local y = EMOJI_GRID_TOP + math.floor(slot / EMOJI_COLUMNS) * 46
+            render.setColor(panel)
+            render.drawRect(x, y, 55, 41)
+            if i == selectedEmoji then
+                render.setColor(accent)
+                render.drawRect(x, y + 38, 55, 3)
+            end
+            label(x + 14, y + 10, EMOJIS[i], i == selectedEmoji and accent or ink, emojiFont)
+        end
+        label(22, 418, selectedEmoji .. " / " .. #EMOJIS, muted, smallFont)
+        label(22, 483, status ~= "" and status or "1-9 category  |  Arrows select  |  PgUp/PgDn  |  Enter inserts", muted, smallFont)
+        return true
+    end
+    return false
+end
+
+hook.add("render", "chatroom_screen", function()
+    if not poweredOn then
+        render.setColor(Color(9, 13, 19))
+        render.drawRect(0, 0, 512, 512)
+        label(22, 449, "Computer off", muted)
+        label(22, 479, "Set the Wiremod Power input to 1.", muted, smallFont)
+        return
+    end
+    local now = timer.curtime()
+    if now < startupUntil then
+        local progress = 1 - (startupUntil - now) / themes.startupDuration
+        render.setColor(background)
+        render.drawRect(0, 0, 512, 512)
+        label(72, 200, "Starting computer", ink, titleFont)
+        render.setColor(panel)
+        render.drawRect(72, 260, 368, 10)
+        if progress > 0 then
+            render.setColor(accent)
+            render.drawRect(72, 260, 368 * progress, 10)
+        end
+        return
+    end
+    render.clear(background)
+    render.setColor(panel)
+    render.drawRect(0, 0, 512, 72)
+    if isOwner and not themeConfigured then
+        renderThemeSetup()
+        return
+    end
+    if isOwner and computerName == "" then
+        label(22, 10, "Computer setup", ink, titleFont)
+        label(22, 47, "Choose a computer name", muted, smallFont)
+        label(22, 111, "Use 1–24 letters, numbers, hyphens or underscores.", ink, smallFont)
+        render.setColor(panel)
+        render.drawRect(16, 147, 480, 50)
+        label(26, 163, nameDraft .. "_", accent)
+        label(22, 483, status ~= "" and status or
+            (keyboardActive and "Type a name and press Enter." or "Look at the Wiremod Keyboard and press E."), muted, smallFont)
+        return
+    end
+    if room == "" and not gameTab then
+        render.drawRect(16, 423, 480, 48)
+    elseif not gameTab and not showPayments and not showPrivate and not showChannels then
+        render.drawRect(16, 372, 480, 102)
+    end
+    local title = room ~= "" and room:sub(1, 15) or "Chatroom"
+    if gameTab == "menu" then title = "Desktop"
+    elseif gameTab == "calculator" then title = "Calculator"
+    elseif gameTab == "website" then title = "Website Viewer"
+    elseif gameTab == "changelog" then title = "Changelog"
+    elseif gameTab == "settings" then title = "Settings"
+    elseif gameTab == "hud" then title = "HUD"
+    elseif gameTab == "tic" then title = "Tic-Tac-Toe"
+    elseif gameTab == "mines" then title = "Minesweeper"
+    elseif gameTab == "chess" then title = "Chess"
+    elseif gameTab == "battleship" then title = "Battleship"
+    elseif gameTab == "trail" then title = "Oregon Trail"
+    elseif showPayments then title = "Payments"
+    elseif showPrivate then title = "Private messages"
+    elseif showChannels then title = "Channels" end
+    label(22, 10, title, ink, titleFont)
+
+    if not isOwner then
+        label(22, 46, "This terminal belongs to another player.", muted, smallFont)
+        return
+    end
+    label(376, 46, "Computer v" .. CHIP_VERSION, muted, smallFont)
+    if room ~= "" then
+        if not gameTab and not showPayments and not showPrivate then
+            render.setColor(background)
+            render.drawRect(265, 8, 100, 31)
+            label(276, 15, "F2 Channels", accent, smallFont)
+        end
+        if showChannels then
+            renderChannels()
+            return
+        end
+        if showPrivate then
+            renderPrivate()
+            return
+        end
+    end
+    if not joining and not versionWarning then
+        render.setColor(background)
+        render.drawRect(369, 8, 127, 31)
+        local shortcut = gameTab == "menu" and "F1 Last app" or "F1 Desktop"
+        label(380, 15, shortcut, accent, smallFont)
+        if gameTab then
+            renderAppsPanel()
+            return
+        end
+    end
+    local focused = keyboardActive
+    if room == "" then
+        if versionWarning then
+            local warning = versionStatus(versionWarning.version)
+            label(22, 46, "Version mismatch", muted, smallFont)
+            label(22, 90, versionWarning.name .. "  #" .. versionWarning.id, ink)
+            label(22, 119, warning, accent, smallFont)
+            label(22, 148, "Some features may behave differently.", muted, smallFont)
+            label(26, 439, "Enter continues  |  F2 goes back", ink)
+            return
+        end
+        label(22, 46, joining and "Enter server password" or "Select a server", muted, smallFont)
+        if joining then
+            label(22, 90, joining.name .. "  #" .. joining.id, ink)
+            local version = versionStatus(joining.version)
+            label(22, 119, version, muted, smallFont)
+            label(26, 439, "Password  " .. string.rep("*", math.min(32, #password)), accent)
+        else
+            if #directory == 0 then
+                label(22, 90, directoryReceived and "No matching chatroom servers found." or "Looking for chatroom servers...", muted)
+                if directoryReceived then
+                    label(22, 119, directoryDetail, muted, smallFont)
+                end
+            end
+            local first = math.max(1, selected - PICKER_ROWS + 1)
+            for i = first, math.min(first + PICKER_ROWS - 1, #directory) do
+                local entry = directory[i]
+                local active = i == selected
+                local y = 88 + (i - first) * 26
+                if active then
+                    render.setColor(panel)
+                    render.drawRect(16, y - 3, 480, 24)
+                end
+                label(22, y, (active and "> " or "  ") .. entry.name:sub(1, 22) .. "  #" .. entry.id,
+                    active and accent or ink)
+                local version = versionStatus(entry.version)
+                label(338, y, version, muted, smallFont)
+            end
+            label(26, 439, focused and "Up/Down selects   Enter opens" or "Use the wired keyboard to select", muted, smallFont)
+        end
+        local hint = joining and "Enter joins  |  F2 goes back  |  Alt exits" or "F1 Desktop  |  Alt exits"
+        label(22, 483, status ~= "" and status or (focused and hint or "Look at the Wiremod Keyboard and press E"), muted, smallFont)
+        return
+    end
+    if activeAlert and timer.curtime() < alertUntil then
+        label(22, 46, activeAlert, alertColor, smallFont)
+    else
+        label(22, 46, "# " .. channelName .. "  |  " .. versionStatus(roomVersion), accent, smallFont)
+    end
+
+    if renderEmojiPicker() then return end
+    if #rows == 0 then label(22, 91, "No messages yet.", muted) end
+    local last = #rows - scroll
+    local first = math.max(1, last - ROWS_VISIBLE + 1)
+    for i = first, last do
+        local row = rows[i]
+        label(22, 88 + (i - first) * 22, row.text, row.alert and alertColor or (row.mention and accent or ink), row.face)
+    end
+
+    local prompt = focused and ("> " .. draft .. "_")
+        or (draft ~= "" and draft or "Use the wired keyboard to type")
+    if prompt ~= lastPrompt then
+        promptRows = wrapText(prompt, 330, emojiFont)
+        lastPrompt = prompt
+    end
+    local firstPrompt = math.max(1, #promptRows - COMPOSER_ROWS + 1)
+    for i = firstPrompt, #promptRows do
+        label(26, 378 + (i - firstPrompt) * 18, promptRows[i], focused and accent or muted, emojiFont)
+    end
+    local hint = focused and "F1 Desktop  |  F2 Channels  |  F4 Emoji  |  F5 PM  |  F6 Leave"
+        or "Look at the Wiremod Keyboard and press E"
+    label(22, 483, status ~= "" and status or hint, muted, smallFont)
+end)
+
+hook.add("drawhud", "chatroom_current_chat", function()
+    if not poweredOn or timer.curtime() < startupUntil or not isOwner or not showChatHUD or room == "" then return end
+    local title = "Room: " .. room .. "  |  # " .. channelName
+    local first = math.max(1, #rows - 5)
+    local count = math.max(0, #rows - first + 1)
+    render.setColor(background)
+    render.drawRect(16, 16, 500, 34 + count * 19)
+    render.setColor(accent)
+    render.drawRect(16, 16, 3, 34 + count * 19)
+    label(28, 24, title, accent, smallFont)
+    for i = first, #rows do
+        local row = rows[i]
+        label(28, 47 + (i - first) * 19, row.text, row.alert and alertColor or (row.mention and accent or ink), row.face)
+    end
+end)
