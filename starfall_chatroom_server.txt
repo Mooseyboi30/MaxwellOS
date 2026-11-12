@@ -1,10 +1,11 @@
 --@name Chatroom Server
---@author v27.3
+--@author v27.4
 --@shared
 
 -- Match NETWORK in the computer chip. Set the room name and password on the linked screen.
 local NETWORK = "lobby"
-local CHIP_VERSION = "27.3"
+local CHIP_VERSION = "27.4"
+-- Get matching chip versions at https://github.com/Mooseyboi30/MaxwellOS
 local POSTS_TOP, POSTS_BOTTOM = 160, 480
 local POSTS_TRACK_X = 473
 local MEMBERS_PER_PAGE = 8
@@ -1524,7 +1525,7 @@ hook.add("render", "chatroom_board", function()
     render.drawRect(0, 0, 512, 76)
     label(22, 10, roomName == "" and "Server setup" or preview(roomName, 24), ink, titleFont)
     if not isOwner then
-        label(22, 47, "Server v" .. CHIP_VERSION, muted, bodyFont)
+        label(22, 47, "Server v" .. CHIP_VERSION .. "  |  github.com/Mooseyboi30/MaxwellOS", muted, bodyFont)
         label(22, 94, "Only the server owner can view this board.", muted, bodyFont)
         return
     end
@@ -1532,7 +1533,7 @@ hook.add("render", "chatroom_board", function()
         renderSetup()
         return
     end
-    label(22, 47, "Server v" .. CHIP_VERSION, muted, bodyFont)
+    label(22, 47, "Server v" .. CHIP_VERSION .. "  |  github.com/Mooseyboi30/MaxwellOS", muted, bodyFont)
     render.setColor(panel)
     for i = 0, 3 do render.drawRect(16 + i * 120, 83, 116, 35) end
     label(22, 90, "Players (" .. #members .. ")", tab == "connected" and accent or ink, authorFont)

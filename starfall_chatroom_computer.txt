@@ -1,9 +1,11 @@
 --@name Chatroom Computer
---@author v27.3
+--@author v27.4
 --@shared
 
-local CHIP_VERSION = "27.3"
+local CHIP_VERSION = "27.4"
+-- Get matching chip versions at https://github.com/Mooseyboi30/MaxwellOS
 local CHANGELOG = {
+    {"v27.4", "Added GitHub update links to the computer and chatroom server."},
     {"v27.3", "Website Viewer supports scrolling and purchase inquiry buttons on sites that publish them."},
     {"v27.2", "Added a desktop Settings app for changing colors and the computer name after setup."},
     {"v27.0", "Closed apps pause polling and Minesweeper board generation. Chatrooms and joined multiplayer matches stay active. Rapid Wiremod input retries when bandwidth is busy, and overlapping arrow sounds are limited."},
@@ -3504,6 +3506,8 @@ hook.add("render", "chatroom_screen", function()
             label(22, 90, versionWarning.name .. "  #" .. versionWarning.id, ink)
             label(22, 119, warning, accent, smallFont)
             label(22, 148, "Some features may behave differently.", muted, smallFont)
+            label(22, 189, "Get matching versions:", ink, smallFont)
+            label(22, 214, "https://github.com/Mooseyboi30/MaxwellOS", accent, smallFont)
             label(26, 439, "Enter continues  |  F2 goes back", ink)
             return
         end
