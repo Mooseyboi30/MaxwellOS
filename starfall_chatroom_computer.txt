@@ -5,7 +5,7 @@
 local CHIP_VERSION = "27.4"
 -- Get matching chip versions at https://github.com/Mooseyboi30/MaxwellOS
 local CHANGELOG = {
-    {"v27.4", "Added GitHub update links to the computer and chatroom server."},
+    {"v27.4", "Added GitHub update links and merged the pocket computer with lockable typing and private message alerts."},
     {"v27.3", "Website Viewer supports scrolling and purchase inquiry buttons on sites that publish them."},
     {"v27.2", "Added a desktop Settings app for changing colors and the computer name after setup."},
     {"v27.0", "Closed apps pause polling and Minesweeper board generation. Chatrooms and joined multiplayer matches stay active. Rapid Wiremod input retries when bandwidth is busy, and overlapping arrow sounds are limited."},
@@ -963,6 +963,7 @@ return
 end
 
 local isOwner = player() == owner()
+local PHONE = {open = false, unread = 0, alertUntil = 0, lockNotice = "", lockNoticeUntil = 0}
 local room = ""
 local roomVersion = ""
 local channelName = "General"
@@ -1542,6 +1543,17 @@ local function handleEmojiKey(key, enter)
     return true
 end
 
+function PHONE.geometry()
+    local sw, sh = render.getResolution()
+    -- Reserve a separate button row for the control lock.
+    local scale = math.min(0.90, math.max(0.38, (sh - 150) / 512))
+    local face = 512 * scale
+    local fw, fh = face + 28, face + 128
+    local x = math.max(12, sw - fw - 24)
+    local y = math.max(12, (sh - fh) * 0.5)
+    return x, y, scale, face, fw, fh
+end
+
 local function versionStatus(version)
     local serverVersion = tonumber(version)
     if not serverVersion then return "Server version unknown", false end
@@ -1716,7 +1728,6 @@ local function toggleLastApp()
         return
     end
     joining, versionWarning, password = nil, nil, ""
-    if showPrivate then sendPrivateAction(0) end
     showPrivate, showChannels, emojiOpen = false, false, false
     changeGameTab("menu")
 end
@@ -2159,7 +2170,33 @@ if isOwner then
 
     net.receive("room_private_state", function()
         local snapshot = net.readTable()
+        if room == "" then return end
+        local messages = snapshot.messages or {}
+        local old = PHONE.previousMessages
+        if old and not showPrivate then
+            local overlap = math.min(#old, #messages)
+            while overlap > 0 do
+                local same = true
+                for i = 1, overlap do
+                    if old[#old - overlap + i] ~= messages[i] then same = false; break end
+                end
+                if same then break end
+                overlap = overlap - 1
+            end
+            for i = overlap + 1, #messages do
+                if messages[i]:sub(1, 5) == "From " then
+                    PHONE.unread = math.min(PHONE.unread + 1, 99)
+                    PHONE.alertUntil = timer.curtime() + 6
+                end
+            end
+            if PHONE.alertUntil > timer.curtime() and not (PHONE.previousAlert == PHONE.alertUntil) and poweredOn then
+                playChatSound("mention")
+            end
+            PHONE.previousAlert = PHONE.alertUntil
+        end
+        PHONE.previousMessages = messages
         if not showPrivate then return end
+        PHONE.unread = 0
         local previous = privateRecipients[privateSelection]
         privateRecipients, privateSelection, privateRows = snapshot.recipients or {}, 0, {}
         for i, entry in ipairs(privateRecipients) do
@@ -2197,10 +2234,7 @@ if isOwner then
         paymentStatus = result.notice or ""
     end)
 
-    hook.add("StarfallUsed", "chatroom_theme", function(user, screen)
-        if user ~= player() or not screen or not screen:isValid()
-            or screen:getClass() ~= "starfall_screen" then return end
-        local x, y = render.cursorPos(user, screen)
+    function PHONE.computerClickAt(x, y)
         if not poweredOn or timer.curtime() < startupUntil or not x or not y or x < 16 or x >= 496 then return end
         if themeConfigured then
             if room ~= "" and not gameTab and not showPayments and not showPrivate and not emojiOpen
@@ -2292,6 +2326,12 @@ if isOwner then
             return
         end
         themes.selectAt(y)
+    end
+
+    hook.add("StarfallUsed", "chatroom_theme", function(user, screen)
+        if user ~= player() or not screen or not screen:isValid()
+            or screen:getClass() ~= "starfall_screen" then return end
+        PHONE.computerClickAt(render.cursorPos(user, screen))
     end)
 
     net.receive("room_games_state", function()
@@ -2402,6 +2442,10 @@ if isOwner then
             matches, currentGame, selectedMatch, gameStatus = {}, nil, 1, ""
             gameWatchTab, gameEntryUntil = nil, nil
         end
+        if room ~= newRoom then
+            PHONE.previousMessages, PHONE.unread, PHONE.alertUntil = nil, 0, 0
+            PHONE.watchInbox = newRoom ~= ""
+        end
         room = newRoom
         rows = {}
         local count = net.readUInt(5)
@@ -2463,6 +2507,7 @@ if isOwner then
         local powered = net.readBool()
         if powered ~= poweredOn then
             poweredOn = powered
+            if not powered and PHONE.open then PHONE.setOpen(false) end
             startupUntil = powered and timer.curtime() + themes.startupDuration or 0
             if gameTab == "website" then
                 if poweredOn then startWebsitePolling()
@@ -2505,6 +2550,7 @@ if isOwner then
             paymentStatus = confirming and "No response. Check for an in-game payment prompt."
                 or "Payment review timed out. Try again."
         end
+        if PHONE.watchInbox and sendPrivateAction(1) then PHONE.watchInbox = false end
         if settings.waiting and timer.curtime() >= settings.waiting then
             settings.waiting, settings.message = nil, "No name change confirmation. Try again."
         end
@@ -2733,7 +2779,7 @@ if isOwner then
         end
         if key == 167 and not gameTab and not showPayments and not privateWaiting then
             local opening = not showPrivate
-            if sendPrivateAction(opening and 1 or 0) then showPrivate = opening end
+            if not opening or sendPrivateAction(1) then showPrivate = opening end
             return
         end
         if showPrivate then
@@ -2769,7 +2815,7 @@ if isOwner then
     net.receive("room_keys", function()
         for i = 1, net.readUInt(9) do
             local key = net.readUInt(8)
-            if keyboardActive and poweredOn and timer.curtime() >= startupUntil then
+            if keyboardActive and poweredOn and not PHONE.controlsLocked and timer.curtime() >= startupUntil then
                 local enter = key == 10 or key == 13 or key == 142
                 local cue = enter and "enter" or (gameTab and "game" or "key")
                 handleKey(key)
@@ -2784,6 +2830,163 @@ if isOwner then
                 end
             end
         end
+    end)
+    setupPermissionRequest({"enablehud", "render.hud", "input", "input.enablecursor", "input.lockcontrols"},
+        "Optional pocket computer with mouse and keyboard controls", true)
+
+    function PHONE.activateHud()
+        if hasPermission("enablehud") and hasPermission("render.hud") then
+            pcall(enableHud, player(), true)
+        end
+    end
+    function PHONE.setControlsLocked(enabled)
+        if not enabled then
+            -- Only undo a lock that this phone created, not another chip's lock.
+            if PHONE.controlsLocked and hasPermission("input.lockcontrols") then
+                pcall(input.lockControls, false)
+            end
+            PHONE.controlsLocked = false
+            PHONE.lockNotice = ""
+            return
+        end
+        if not PHONE.open or not poweredOn then return end
+        if not hasPermission("input.lockcontrols") then
+            PHONE.lockNotice = "Grant Lock Controls permission"
+            PHONE.lockNoticeUntil = timer.curtime() + 4
+            return
+        end
+        -- Starfall enforces a cooldown between locking attempts. Check before
+        -- calling so a failed attempt does not throw an error in the chip.
+        local canCheck, canLock = pcall(input.canLockControls)
+        if not canCheck or not canLock then
+            PHONE.lockNotice = "Relock cooldown (about 10 seconds)"
+            PHONE.lockNoticeUntil = timer.curtime() + 3
+            return
+        end
+        local ok = pcall(input.lockControls, true)
+        if ok then
+            PHONE.controlsLocked = true
+            PHONE.lockNotice = ""
+        else
+            PHONE.lockNotice = "Unable to lock controls; try again"
+            PHONE.lockNoticeUntil = timer.curtime() + 3
+        end
+    end
+    function PHONE.setOpen(enabled)
+        if not enabled then PHONE.setControlsLocked(false) end
+        PHONE.open = enabled
+        if enabled then PHONE.activateHud() end
+        if hasPermission("input.enablecursor") then
+            pcall(input.enableCursor, enabled)
+        end
+    end
+    function PHONE.openInbox()
+        if gameTab then changeGameTab(nil) end
+        if gameTab then return end -- A payment review or live game may prevent switching.
+        if room ~= "" then
+            if not showPrivate and sendPrivateAction(1) then showPrivate = true end
+            if showPrivate then PHONE.unread = 0 end
+        end
+    end
+    hook.add("permissionrequest", "chatroom_phone_permissions", function()
+        PHONE.activateHud()
+        if PHONE.open and hasPermission("input.enablecursor") then
+            pcall(input.enableCursor, true)
+        end
+    end)
+    PHONE.keys = {
+        [KEY.ENTER] = 13, [KEY.PAD_ENTER] = 13,
+        [KEY.BACKSPACE] = 8, [KEY.SPACE] = 32,
+        [KEY.UP] = 17, [KEY.DOWN] = 18, [KEY.LEFT] = 19, [KEY.RIGHT] = 20,
+        [KEY.PAGEUP] = 151, [KEY.PAGEDOWN] = 152,
+        [KEY.F1] = 163, [KEY.F2] = 164, [KEY.F4] = 166,
+        [KEY.F5] = 167, [KEY.F6] = 168,
+        [KEY.SLASH] = 47, [KEY.PERIOD] = 46, [KEY.COMMA] = 44,
+        [KEY.MINUS] = 45, [KEY.EQUAL] = 61,
+        [KEY.SEMICOLON] = 59, [KEY.APOSTROPHE] = 39,
+        [KEY.LBRACKET] = 91, [KEY.RBRACKET] = 93,
+        [KEY.BACKSLASH] = 92, [KEY.BACKQUOTE] = 96,
+        [KEY.PAD_PLUS] = 43, [KEY.PAD_MINUS] = 45,
+        [KEY.PAD_MULTIPLY] = 42, [KEY.PAD_DIVIDE] = 47,
+        [KEY.PAD_DECIMAL] = 46
+    }
+    for number = 0, 9 do
+        PHONE.keys[KEY[tostring(number)]] = 48 + number
+        PHONE.keys[KEY["PAD_" .. number]] = 48 + number
+    end
+    for i = 0, 25 do PHONE.keys[KEY.A + i] = 97 + i end
+    PHONE.shiftKeys = {
+        [48] = 41, [49] = 33, [50] = 64, [51] = 35,
+        [52] = 36, [53] = 37, [54] = 94, [55] = 38,
+        [56] = 42, [57] = 40, [61] = 43, [45] = 95,
+        [47] = 63, [46] = 62, [44] = 60, [59] = 58,
+        [39] = 34, [91] = 123, [93] = 125,
+        [92] = 124, [96] = 126
+    }
+
+    hook.add("inputpressed", "chatroom_phone_hotkey", function(button)
+        if not hasPermission("input") then return end
+        -- When typing is locked, Shift+P is an uppercase P, not the phone hotkey.
+        -- Unlock with Alt or the on-screen button before toggling the phone.
+        if button == KEY.P and input.isShiftDown() and not PHONE.controlsLocked then
+            PHONE.setOpen(not PHONE.open)
+            return
+        end
+        if not PHONE.open or not poweredOn or timer.curtime() < startupUntil then return end
+        if button == KEY.ESCAPE then
+            PHONE.setOpen(false)
+            return
+        end
+        if button == KEY.LALT or button == KEY.RALT then
+            if PHONE.controlsLocked then PHONE.setControlsLocked(false) end
+            return
+        end
+        if button == KEY.F5 and room ~= "" then
+            PHONE.openInbox()
+            return
+        end
+        -- Only consume physical keyboard typing while game controls are locked.
+        -- Otherwise the phone remains clickable while you play normally.
+        if not PHONE.controlsLocked then return end
+        local key = PHONE.keys[button]
+        if key then
+            local shifted = input.isShiftDown()
+            if key >= 97 and key <= 122 and shifted then key = key - 32 end
+            if shifted then key = PHONE.shiftKeys[key] or key end
+            handleKey(key)
+        end
+    end)
+
+    PHONE.mousePreviouslyDown = false
+    hook.add("think", "chatroom_phone_mouse", function()
+        -- Starfall always allows Alt to release its control lock. Reflect that
+        -- emergency unlock in the button state before accepting more typing.
+        if PHONE.controlsLocked then
+            local ok, actual = pcall(input.isControlLocked)
+            if ok and not actual then PHONE.controlsLocked = false end
+        end
+        if not PHONE.open or not hasPermission("input") or not hasPermission("input.enablecursor") then
+            PHONE.mousePreviouslyDown = false
+            return
+        end
+        local down = input.isMouseDown(MOUSE.LEFT)
+        if down and not PHONE.mousePreviouslyDown then
+            local mx, my = input.getCursorPos()
+            local x, y, scale, face, fw = PHONE.geometry()
+            if mx >= x + 14 and mx < x + fw - 14
+                and my >= y + face + 82 and my < y + face + 112 then
+                PHONE.setControlsLocked(not PHONE.controlsLocked)
+            elseif mx >= x + fw - 43 and mx < x + fw - 17 and my >= y + 11 and my < y + 37 then
+                PHONE.setOpen(false)
+            elseif mx >= x + fw - 120 and mx < x + fw - 13
+                and my >= y + face + 46 and my < y + face + 81 then
+                PHONE.openInbox()
+            elseif mx >= x + 14 and mx < x + 14 + face
+                and my >= y + 46 and my < y + 46 + face then
+                PHONE.computerClickAt((mx - x - 14) / scale, (my - y - 46) / scale)
+            end
+        end
+        PHONE.mousePreviouslyDown = down
     end)
 end
 
@@ -3406,7 +3609,7 @@ local function renderEmojiPicker()
     return false
 end
 
-hook.add("render", "chatroom_screen", function()
+function PHONE.drawComputerScreen()
     if not poweredOn then
         render.setColor(Color(9, 13, 19))
         render.drawRect(0, 0, 512, 512)
@@ -3443,7 +3646,7 @@ hook.add("render", "chatroom_screen", function()
         render.drawRect(16, 147, 480, 50)
         label(26, 163, nameDraft .. "_", accent)
         label(22, 483, status ~= "" and status or
-            (keyboardActive and "Type a name and press Enter." or "Look at the Wiremod Keyboard and press E."), muted, smallFont)
+            ((keyboardActive or PHONE.open) and "Type a name and press Enter." or "Look at the Wiremod Keyboard and press E."), muted, smallFont)
         return
     end
     if room == "" and not gameTab then
@@ -3498,7 +3701,7 @@ hook.add("render", "chatroom_screen", function()
             return
         end
     end
-    local focused = keyboardActive
+    local focused = keyboardActive or PHONE.open
     if room == "" then
         if versionWarning then
             local warning = versionStatus(versionWarning.version)
@@ -3572,6 +3775,50 @@ hook.add("render", "chatroom_screen", function()
     local hint = focused and "F1 Desktop  |  F2 Channels  |  F4 Emoji  |  F5 PM  |  F6 Leave"
         or "Look at the Wiremod Keyboard and press E"
     label(22, 483, status ~= "" and status or hint, muted, smallFont)
+end
+hook.add("render", "chatroom_screen", PHONE.drawComputerScreen)
+
+hook.add("drawhud", "chatroom_phone", function()
+    if not isOwner or not PHONE.open then return end
+    if not render.renderTargetExists("maxwellos_phone") then render.createRenderTarget("maxwellos_phone") end
+    local x, y, scale, face, fw, fh = PHONE.geometry()
+    render.selectRenderTarget("maxwellos_phone")
+    render.clear(background)
+    PHONE.drawComputerScreen()
+    render.selectRenderTarget()
+
+    render.setColor(Color(6, 9, 14, 245))
+    render.drawRect(x, y, fw, fh)
+    render.setColor(panel)
+    render.drawRect(x + 5, y + 5, fw - 10, fh - 10)
+    render.setColor(accent)
+    render.drawRect(x + 12, y + 41, face, 3)
+    label(x + 17, y + 15, "POCKET COMPUTER", ink, smallFont)
+    render.setColor(Color(115, 46, 49))
+    render.drawRect(x + fw - 43, y + 11, 26, 26)
+    label(x + fw - 35, y + 14, "X", ink, smallFont)
+
+    render.setColor(Color(255, 255, 255))
+    render.setRenderTargetTexture("maxwellos_phone")
+    render.drawTexturedRectUV(x + 14, y + 46, face, face, 0, 0, 0.5, 0.5)
+    render.setColor(accent)
+    render.drawRect(x + fw / 2 - 26, y + fh - 9, 52, 3)
+    if PHONE.lockNotice ~= "" and timer.curtime() < PHONE.lockNoticeUntil then
+        label(x + 18, y + face + 64, PHONE.lockNotice, alertColor, smallFont)
+    else
+        label(x + 18, y + face + 64,
+            PHONE.controlsLocked and "Alt unlocks | X closes" or "Shift+P to close", muted, smallFont)
+        label(x + fw - 108, y + face + 64,
+            PHONE.unread > 0 and ("PM " .. PHONE.unread .. "  OPEN") or "PM  OPEN",
+            PHONE.unread > 0 and alertColor or accent, smallFont)
+    end
+    -- Toggle is deliberately separate from the screen so it stays accessible
+    -- even while other apps (including chat and private messages) are open.
+    render.setColor(PHONE.controlsLocked and Color(27, 92, 72) or Color(46, 59, 73))
+    render.drawRect(x + 14, y + face + 82, fw - 28, 30)
+    label(x + 22, y + face + 88,
+        PHONE.controlsLocked and "LOCK CONTROLS: ON" or "LOCK CONTROLS: OFF",
+        PHONE.controlsLocked and accent or ink, smallFont)
 end)
 
 hook.add("drawhud", "chatroom_current_chat", function()
@@ -3588,4 +3835,10 @@ hook.add("drawhud", "chatroom_current_chat", function()
         local row = rows[i]
         label(28, 47 + (i - first) * 19, row.text, row.alert and alertColor or (row.mention and accent or ink), row.face)
     end
+end)
+
+
+hook.add("drawhud", "maxwellos_phone_pm", function()
+    if not isOwner or not poweredOn or PHONE.open or timer.curtime() >= PHONE.alertUntil then return end
+    label(22, 155, "New private message  |  Shift+P opens phone", accent, smallFont)
 end)
