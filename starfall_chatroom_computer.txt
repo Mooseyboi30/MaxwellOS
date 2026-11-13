@@ -1,10 +1,12 @@
 --@name Chatroom Computer
---@author v32.7
+--@author v33.0
 --@shared
 
-local CHIP_VERSION = "32.7"
+local CHIP_VERSION = "33.0"
 -- Get matching chip versions at https://github.com/Mooseyboi30/MaxwellOS
 local CHANGELOG = {
+    {"v33.0", "Added intermediate computer color presets and a scrollable theme list."},
+    {"v32.9", "Paint adds a scrollable 34-color palette, direct sharing from save slots, and chat thumbnails."},
     {"v32.7", "Room setup, channels, and bans persist across uploads. Fixed a Starfall pattern-limit error when restoring them."},
     {"v32.4", "Paint uses a 50x50 canvas, has five local save slots, and shares drawings in chat channels."},
     {"v32.2", "Update notices direct players to GitHub for the latest chips."},
@@ -1258,7 +1260,19 @@ local themes = {
     {name = "White", background = Color(251, 251, 252), panel = Color(228, 231, 236), accent = Color(45, 56, 77),
         ink = Color(22, 26, 32), muted = Color(68, 76, 91), alert = Color(154, 58, 22)}
 }
-local settings = {theme = 1, page = "color", name = "", message = ""}
+for _, shade in ipairs({
+    {"Rose", 245, 115, 144}, {"Peach", 247, 181, 98}, {"Lime", 184, 216, 80},
+    {"Mint", 154, 229, 204}, {"Teal", 42, 177, 152}, {"Cyan", 66, 196, 223},
+    {"Sky", 166, 218, 255}, {"Periwinkle", 124, 108, 214}, {"Orchid", 203, 114, 218},
+    {"Lavender", 232, 182, 244}, {"Mocha", 170, 125, 100}, {"Slate", 151, 151, 163}
+}) do
+    local name, r, g, b = unpack(shade)
+    themes[#themes + 1] = {name = name, accent = Color(r, g, b),
+        background = Color(math.floor(r * 0.13), math.floor(g * 0.13), math.floor(b * 0.13)),
+        panel = Color(math.floor(r * 0.23), math.floor(g * 0.23), math.floor(b * 0.23))}
+end
+
+local settings = {theme = 1, themeTop = 1, page = "color", name = "", message = ""}
 local themeConfigured = false
 local THEME_TOP = 100
 local THEME_STEP = 34
@@ -1268,6 +1282,11 @@ function settings.saveProfile()
     if not isOwner or not file or not file.write then return end
     local ok = pcall(file.write, "maxwellos_profile.txt", settings.theme .. "\n" .. computerName)
     settings.storageError = not ok
+end
+
+function themes.move(delta)
+    settings.theme = math.max(1, math.min(#themes, settings.theme + delta))
+    settings.themeTop = math.max(settings.theme - 8, math.min(settings.themeTop, settings.theme))
 end
 
 local function applyTheme()
@@ -1281,19 +1300,24 @@ end
 if isOwner and file and file.read then
     local ok, data = pcall(file.read, "maxwellos_profile.txt")
     if ok and type(data) == "string" and #data <= 28 then
-        local theme, name = data:match("^(%d)\n([A-Za-z0-9_-]*)$")
+        local theme, name = data:match("^(%d%d?)\n([A-Za-z0-9_-]*)$")
         theme = tonumber(theme)
         if theme and themes[theme] and #name <= 24 then
             settings.theme, computerName = theme, name
+            themes.move(0)
             applyTheme()
         end
     end
 end
-function themes.selectAt(y)
-    if y >= THEME_TOP and y < THEME_TOP + #themes * THEME_STEP then
+function themes.selectAt(y, x)
+    if x and x >= 444 and y >= 419 and y < 466 then
+        themes.move(9)
+    elseif x and x >= 392 and y >= 419 and y < 466 then
+        themes.move(-9)
+    elseif y >= THEME_TOP and y < THEME_TOP + 9 * THEME_STEP then
         local offset = y - THEME_TOP
         if offset % THEME_STEP < THEME_HEIGHT then
-            settings.theme = math.floor(offset / THEME_STEP) + 1
+            settings.theme = math.min(#themes, settings.themeTop + math.floor(offset / THEME_STEP))
         end
     elseif y >= 419 and y < 466 then
         applyTheme()
@@ -1504,10 +1528,17 @@ function PHONE.squadron.draw()
 end
 
 PHONE.paint = {
-    x = 25, y = 25, color = 1, slot = 1, rows = {}, runs = {},
+    x = 25, y = 25, color = 1, slot = 1, paletteTop = 1, rows = {}, runs = {},
     palette = {Color(20, 20, 28), Color(220, 55, 68), Color(245, 145, 45),
         Color(249, 212, 65), Color(49, 164, 102), Color(55, 113, 220),
-        Color(153, 79, 213), Color(255, 255, 255)}
+        Color(153, 79, 213), Color(255, 255, 255),
+        Color(124, 34, 49), Color(191, 67, 100), Color(245, 115, 144), Color(255, 177, 188),
+        Color(173, 79, 38), Color(222, 106, 61), Color(247, 181, 98), Color(255, 218, 174),
+        Color(176, 142, 47), Color(212, 197, 66), Color(184, 216, 80), Color(233, 244, 161),
+        Color(31, 95, 70), Color(84, 194, 111), Color(42, 177, 152), Color(154, 229, 204),
+        Color(42, 68, 131), Color(42, 139, 181), Color(66, 196, 223), Color(166, 218, 255),
+        Color(87, 49, 145), Color(124, 108, 214), Color(203, 114, 218), Color(232, 182, 244),
+        Color(110, 73, 53), Color(151, 151, 163)}
 }
 
 function PHONE.paint.pixel(x, y)
@@ -1529,11 +1560,25 @@ function PHONE.paint.pixel(x, y)
     paint.runs[y] = runs
 end
 
+function PHONE.paint.colorIndex(byte)
+    if byte >= 65 and byte <= 90 then return byte - 56 end
+    if byte >= 48 and byte <= 56 then return byte - 48 end
+    return -1
+end
+
+function PHONE.paint.scrollPalette(delta)
+    local paint = PHONE.paint
+    paint.paletteTop = math.max(1, math.min(#paint.palette - 6, paint.paletteTop + delta))
+end
+
 function PHONE.paint.encode()
     local cells = {}
     for y = 1, 50 do
         local row = PHONE.paint.rows[y] or {}
-        for x = 1, 50 do cells[#cells + 1] = tostring(row[x] or 0) end
+        for x = 1, 50 do
+            local index = row[x] or 0
+            cells[#cells + 1] = string.char(index <= 8 and index + 48 or index + 56)
+        end
     end
     return table.concat(cells)
 end
@@ -1544,8 +1589,8 @@ function PHONE.paint.decode(data)
     for y = 1, 50 do
         local row, spans, previous = {}, {}, 0
         for x = 1, 50 do
-            local color = data:byte((y - 1) * 50 + x) - 48
-            if color < 0 or color > 8 then return false end
+            local color = PHONE.paint.colorIndex(data:byte((y - 1) * 50 + x))
+            if color < 0 or color > #PHONE.paint.palette then return false end
             if color > 0 then
                 row[x] = color
                 if color == previous then spans[#spans][2] = spans[#spans][2] + 1
@@ -1577,6 +1622,21 @@ function PHONE.paint.action(action)
         paint.message = rows and "Loaded slot " .. paint.slot .. "." or ("No readable painting in slot " .. paint.slot .. ".")
     elseif room == "" then
         paint.message = "Join a chatroom first."
+    elseif action == "sendSlot" then
+        if net.getBytesLeft() < 2560 then
+            paint.message = "Connection busy. Try again."
+            return
+        end
+        local ok, data
+        if file and file.read then ok, data = pcall(file.read, path) end
+        if not paint.decode(ok and data) then
+            paint.message = "No readable painting in slot " .. paint.slot .. "."
+            return
+        end
+        net.start("room_painting")
+        net.writeBool(true)
+        net.writeString(data)
+        net.send()
     elseif net.getBytesLeft() < (action == "send" and 2560 or 32) then
         paint.message = "Connection busy. Try again."
     else
@@ -1589,11 +1649,17 @@ end
 
 function PHONE.paint.click(x, y)
     local paint = PHONE.paint
-    if x >= 56 and x < 456 and y >= 78 and y < 478 then
+    if x >= 16 and x < 50 and y >= 395 and y < 455 then
+        paint.action("sendSlot")
+    elseif x >= 56 and x < 456 and y >= 78 and y < 478 then
         paint.x, paint.y = math.floor((x - 56) / 8) + 1, math.floor((y - 78) / 8) + 1
         paint.pixel(paint.x, paint.y)
-    elseif x >= 466 and x < 496 and y >= 84 and y < 84 + 9 * 32 then
-        paint.color = math.floor((y - 84) / 32) + 1
+    elseif x >= 466 and x < 496 and y >= 78 and y < 365 then
+        if y < 101 then paint.scrollPalette(-1)
+        elseif y >= 343 then paint.scrollPalette(1)
+        elseif y >= 108 and y < 108 + 7 * 32 then
+            paint.color = paint.paletteTop + math.floor((y - 108) / 32)
+        elseif y >= 332 then paint.color = 0 end
     elseif x >= 466 and x < 496 and y >= 365 and y < 477 then
         paint.action(({"slot", "save", "load", "send"})[math.floor((y - 365) / 28) + 1])
     end
@@ -1601,11 +1667,15 @@ end
 
 function PHONE.paint.key(key, enter)
     local paint = PHONE.paint
-    if key == 86 or key == 118 then paint.action("slot")
+    if key == 71 or key == 103 then paint.action("sendSlot")
+    elseif key == 86 or key == 118 then paint.action("slot")
     elseif key == 83 or key == 115 then paint.action("save")
     elseif key == 76 or key == 108 then paint.action("load")
     elseif key == 84 or key == 116 then paint.action("send")
-    elseif key >= 49 and key <= 57 then paint.color = key - 48
+    elseif key == 151 then paint.scrollPalette(-7)
+    elseif key == 152 then paint.scrollPalette(7)
+    elseif key >= 49 and key <= 55 then paint.color = paint.paletteTop + key - 49
+    elseif key == 57 then paint.color = 0
     elseif enter or key == 32 then paint.pixel(paint.x, paint.y)
     elseif key == 17 or key == 18 or key == 19 or key == 20 then
         if key == 17 then paint.y = math.max(1, paint.y - 1)
@@ -1631,22 +1701,30 @@ function PHONE.paint.draw()
     end
     render.setColor(Color(255, 90, 130))
     render.drawRectOutline(55 + (paint.x - 1) * 8, 77 + (paint.y - 1) * 8, 10, 10)
-    for i = 1, 9 do
-        local y = 84 + (i - 1) * 32
-        render.setColor(paint.palette[i] or panel)
+    label(474, 80, "^", accent, smallFont)
+    for i = 1, 7 do
+        local index = paint.paletteTop + i - 1
+        local y = 108 + (i - 1) * 32
+        render.setColor(paint.palette[index])
         render.drawRect(466, y, 30, 26)
-        if i == paint.color then
+        if index == paint.color then
             render.setColor(accent)
             render.drawRectOutline(465, y - 1, 32, 28)
         end
     end
-    label(472, 343, "E", ink, smallFont)
+    label(468, 328, paint.color == 0 and "E*" or "E", accent, smallFont)
+    label(474, 344, "v", accent, smallFont)
     for i, text in ipairs({tostring(paint.slot), "S", "L", "T"}) do
         render.setColor(panel)
         render.drawRect(466, 365 + (i - 1) * 28, 30, 24)
         label(475, 369 + (i - 1) * 28, text, accent, smallFont)
     end
-    label(22, 486, paint.message or "Space draw | B pen | V slot | S save | L load | T send", muted, smallFont)
+    render.setColor(panel)
+    render.drawRect(16, 395, 34, 60)
+    label(20, 400, "Send", accent, smallFont)
+    label(20, 418, "slot", accent, smallFont)
+    label(20, 436, "G", muted, smallFont)
+    label(22, 486, paint.message or "PgUp/PgDn palette | 1-7 picks | 9 erases | Space draws", muted, smallFont)
 end
 
 local function calculatorInput(key)
@@ -2424,7 +2502,7 @@ if isOwner then
                     if y >= 72 and y < 98 then
                         settings.selectPage(x < 256 and "color" or "name")
                     elseif settings.page == "color" then
-                        themes.selectAt(y)
+                        themes.selectAt(y, x)
                     elseif y >= 226 and y < 268 then
                         settings.saveName()
                     end
@@ -2476,7 +2554,7 @@ if isOwner then
             end
             return
         end
-        themes.selectAt(y)
+        themes.selectAt(y, x)
     end
 
     hook.add("StarfallUsed", "chatroom_theme", function(user, screen)
@@ -2622,8 +2700,15 @@ if isOwner then
             local mentioned = not isAlert and messageMentions(message, computerName)
             if isAlert then alerts[i] = message end
             if mentioned then mentions[i] = message end
-            for _, line in ipairs(wrapText(message, 468, emojiFont)) do
-                rows[#rows + 1] = {text = line, alert = isAlert, mention = mentioned, face = emojiFont}
+            local prefix = message:sub(1, -66)
+            local thumbnail = message:sub(-64)
+            if #thumbnail == 64 and prefix:find(": [Painting] F7 opens latest", 1, true)
+                and message:sub(-65, -65) == "|" and not thumbnail:find("[^0-8A-Z]") then
+                rows[#rows + 1] = {text = prefix, face = emojiFont, thumbnail = thumbnail}
+            else
+                for _, line in ipairs(wrapText(message, 468, emojiFont)) do
+                    rows[#rows + 1] = {text = line, alert = isAlert, mention = mentioned, face = emojiFont}
+                end
             end
         end
         local notice = net.readString()
@@ -2766,8 +2851,10 @@ if isOwner then
             if key == 19 then settings.selectPage("color")
             elseif key == 20 then settings.selectPage("name")
             elseif settings.page == "color" then
-                if key == 17 then settings.theme = math.max(1, settings.theme - 1)
-                elseif key == 18 then settings.theme = math.min(#themes, settings.theme + 1)
+                if key == 17 then themes.move(-1)
+                elseif key == 18 then themes.move(1)
+                elseif key == 151 then themes.move(-9)
+                elseif key == 152 then themes.move(9)
                 elseif enter then applyTheme() end
             elseif not settings.waiting then
                 if enter then settings.saveName()
@@ -2864,9 +2951,11 @@ if isOwner then
         local enter = key == 10 or key == 13 or key == 142
         if not themeConfigured then
             if key == 17 then
-                settings.theme = math.max(1, settings.theme - 1)
+                themes.move(-1)
             elseif key == 18 then
-                settings.theme = math.min(#themes, settings.theme + 1)
+                themes.move(1)
+            elseif key == 151 or key == 152 then
+                themes.move(key == 151 and -9 or 9)
             elseif enter then
                 applyTheme()
             end
@@ -3181,8 +3270,9 @@ end
 local function renderThemeSetup()
     if not themeConfigured then label(22, 10, "Computer setup", ink, titleFont) end
     label(22, 47, "Choose a color preset", muted, smallFont)
-    for i, theme in ipairs(themes) do
-        local y = THEME_TOP + (i - 1) * THEME_STEP
+    for i = settings.themeTop, math.min(#themes, settings.themeTop + 8) do
+        local theme = themes[i]
+        local y = THEME_TOP + (i - settings.themeTop) * THEME_STEP
         local active = i == settings.theme
         render.setColor(theme.panel)
         render.drawRect(16, y, 480, THEME_HEIGHT)
@@ -3195,6 +3285,8 @@ local function renderThemeSetup()
     render.setColor(panel)
     render.drawRect(16, 419, 480, 47)
     label(26, 433, "Use " .. themes[settings.theme].name, accent)
+    label(399, 433, "<", accent)
+    label(466, 433, ">", accent)
     label(22, 483, themeConfigured and "Left/Right tabs  |  Up/Down colors  |  Enter applies"
         or "Aim and press E, or use Up/Down and Enter.", muted, smallFont)
 end
@@ -3955,7 +4047,15 @@ function PHONE.drawComputerScreen()
     local first = math.max(1, last - ROWS_VISIBLE + 1)
     for i = first, last do
         local row = rows[i]
-        label(22, 88 + (i - first) * 22, row.text, row.alert and alertColor or (row.mention and accent or ink), row.face)
+        local y = 88 + (i - first) * 22
+        if row.thumbnail then
+            for j = 0, 63 do
+                local color = PHONE.paint.colorIndex(row.thumbnail:byte(j + 1))
+                render.setColor(PHONE.paint.palette[color == 0 and 8 or color])
+                render.drawRect(22 + j % 8 * 2, y + math.floor(j / 8) * 2, 2, 2)
+            end
+        end
+        label(row.thumbnail and 46 or 22, y, row.text, row.alert and alertColor or (row.mention and accent or ink), row.face)
     end
 
     if PHONE.typingNames and PHONE.typingNames ~= "" then

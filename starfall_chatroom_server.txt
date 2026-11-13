@@ -1,8 +1,8 @@
 --@name Chatroom Server
---@author v32.7
+--@author v33.0
 --@shared
 
-local CHIP_VERSION = "32.7"
+local CHIP_VERSION = "33.0"
 
 -- Match NETWORK in the computer chip. Set the room name and password on the linked screen.
 local NETWORK = "lobby"
@@ -1226,11 +1226,19 @@ hook.add("remote", "chatroom", function(sender, senderOwner, protocol, network, 
         if type(value) ~= "string" or #value ~= 2500 then return "Invalid painting." end
         for i = 1, #value do
             local byte = value:byte(i)
-            if byte < 48 or byte > 56 then return "Invalid painting." end
+            if not ((byte >= 48 and byte <= 56) or (byte >= 65 and byte <= 90)) then return "Invalid painting." end
         end
         lastPost[senderOwner] = now + 1
         session.typingUntil = nil
-        addHistory(session.name, "Shared a painting", session.name .. ": [Painting] Press F7 to view the latest.", nil, session.channel, value)
+        local thumbnail = {}
+        for y = 3, 50, 6 do
+            for x = 3, 50, 6 do
+                local index = (y - 1) * 50 + x
+                thumbnail[#thumbnail + 1] = value:sub(index, index)
+            end
+        end
+        addHistory(session.name, "Shared a painting", session.name .. ": [Painting] F7 opens latest |"
+            .. table.concat(thumbnail), nil, session.channel, value)
         return "Painting shared."
     end
     if action == "read" and type(value) == "number" then
