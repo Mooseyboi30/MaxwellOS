@@ -1,10 +1,11 @@
 --@name Chatroom Computer
---@author v32.1
+--@author v32.2
 --@shared
 
-local CHIP_VERSION = "32.1"
+local CHIP_VERSION = "32.2"
 -- Get matching chip versions at https://github.com/Mooseyboi30/MaxwellOS
 local CHANGELOG = {
+    {"v32.2", "Update notices direct players to GitHub for the latest chips."},
     {"v32.1", "Fixed GitHub update detection for chatroom servers and shortened update checks to one minute."},
     {"v31.9", "Added Paint, a desktop app with a 100x100 pixel canvas."},
     {"v30.9", "Added GitHub update checks to both MaxwellOS chips."},
@@ -3740,8 +3741,13 @@ function PHONE.drawComputerScreen()
         label(22, 46, "This terminal belongs to another player.", muted, smallFont)
         return
     end
-    label(376, 46, updates.latest and ("Update v" .. updates.latest) or ("Computer v" .. CHIP_VERSION),
-        updates.latest and alertColor or muted, smallFont)
+    if updates.latest then
+        local notice = "Go to GitHub for v" .. updates.latest
+        render.setFont(smallFont)
+        label(496 - render.getTextSize(notice), 46, notice, alertColor, smallFont)
+    else
+        label(376, 46, "Computer v" .. CHIP_VERSION, muted, smallFont)
+    end
     if room ~= "" then
         if not gameTab and not showPayments and not showPrivate then
             render.setColor(background)
