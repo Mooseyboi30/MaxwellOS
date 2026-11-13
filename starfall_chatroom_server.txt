@@ -1,10 +1,11 @@
 --@name Chatroom Server
---@author v31.9
+--@author v32.0
 --@shared
+
+local CHIP_VERSION = "32.0"
 
 -- Match NETWORK in the computer chip. Set the room name and password on the linked screen.
 local NETWORK = "lobby"
-local CHIP_VERSION = "31.9"
 -- Get matching chip versions at https://github.com/Mooseyboi30/MaxwellOS
 local POSTS_TOP, POSTS_BOTTOM = 160, 480
 local POSTS_TRACK_X = 473
@@ -1231,7 +1232,7 @@ function updates.check()
     local url = "https://raw.githubusercontent.com/Mooseyboi30/MaxwellOS/main/starfall_chatroom_server.txt"
     pcall(http.get, url, function(body, _, _, code)
         if code ~= 200 or type(body) ~= "string" then return end
-        local version = body:sub(1, 180):match('CHIP_VERSION = "(%d%d?%d?%.%d)"')
+        local version = body:sub(1, 1024):match('CHIP_VERSION = "(%d%d?%d?%.%d)"')
         if version then
             updates.latest = tonumber(version) > tonumber(CHIP_VERSION) and version or nil
         end

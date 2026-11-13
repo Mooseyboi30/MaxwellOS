@@ -1,10 +1,11 @@
 --@name Chatroom Computer
---@author v31.9
+--@author v32.0
 --@shared
 
-local CHIP_VERSION = "31.9"
+local CHIP_VERSION = "32.0"
 -- Get matching chip versions at https://github.com/Mooseyboi30/MaxwellOS
 local CHANGELOG = {
+    {"v32.0", "Fixed GitHub update detection for chatroom servers."},
     {"v31.9", "Added Paint, a desktop app with a 100x100 pixel canvas."},
     {"v30.9", "Added GitHub update checks to both MaxwellOS chips."},
     {"v30.7", "MaxwellOS remembers your computer name and theme. Room chips save their name and optional password in chip userdata."},
@@ -1004,7 +1005,7 @@ function updates.check()
     local url = "https://raw.githubusercontent.com/Mooseyboi30/MaxwellOS/main/starfall_chatroom_computer.txt"
     pcall(http.get, url, function(body, _, _, code)
         if code ~= 200 or type(body) ~= "string" then return end
-        local version = body:sub(1, 180):match('CHIP_VERSION = "(%d%d?%d?%.%d)"')
+        local version = body:sub(1, 1024):match('CHIP_VERSION = "(%d%d?%d?%.%d)"')
         if version then
             updates.latest = tonumber(version) > tonumber(CHIP_VERSION) and version or nil
         end
