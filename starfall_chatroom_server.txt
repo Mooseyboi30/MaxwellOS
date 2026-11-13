@@ -1,8 +1,8 @@
 --@name Chatroom Server
---@author v32.6
+--@author v32.7
 --@shared
 
-local CHIP_VERSION = "32.6"
+local CHIP_VERSION = "32.7"
 
 -- Match NETWORK in the computer chip. Set the room name and password on the linked screen.
 local NETWORK = "lobby"
@@ -874,8 +874,22 @@ do
     if getUserdata then
         local ok, raw = pcall(getUserdata)
         if ok and type(raw) == "string" and #raw <= 1048576 then
-            local ownerId, name, secret, records = raw:match("^MaxwellOSRoom2\n([^\n]*)\n([^\n]*)\n([^\n]*)(.*)$")
-            if not ownerId then ownerId, name, secret = raw:match("^MaxwellOSRoom1\n([^\n]*)\n([^\n]*)\n([^\n]*)$") end
+            local ownerId, name, secret, records
+            local first = raw:find("\n", 1, true)
+            local format = first and raw:sub(1, first - 1)
+            if format == "MaxwellOSRoom1" or format == "MaxwellOSRoom2" then
+                local second = raw:find("\n", first + 1, true)
+                local third = second and raw:find("\n", second + 1, true)
+                if third then
+                    local fourth = raw:find("\n", third + 1, true)
+                    if format == "MaxwellOSRoom2" or not fourth then
+                        ownerId = raw:sub(first + 1, second - 1)
+                        name = raw:sub(second + 1, third - 1)
+                        secret = raw:sub(third + 1, fourth and fourth - 1 or #raw)
+                        records = fourth and raw:sub(fourth + 1)
+                    end
+                end
+            end
             if not ownerId and json and raw ~= "" then
                 local decoded, saved = pcall(json.decode, raw)
                 if decoded and type(saved) == "table" then

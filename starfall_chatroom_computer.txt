@@ -1,11 +1,11 @@
 --@name Chatroom Computer
---@author v32.6
+--@author v32.7
 --@shared
 
-local CHIP_VERSION = "32.6"
+local CHIP_VERSION = "32.7"
 -- Get matching chip versions at https://github.com/Mooseyboi30/MaxwellOS
 local CHANGELOG = {
-    {"v32.6", "Room setup, custom channels, and bans are saved to processor userdata."},
+    {"v32.7", "Room setup, channels, and bans persist across uploads. Fixed a Starfall pattern-limit error when restoring them."},
     {"v32.4", "Paint uses a 50x50 canvas, has five local save slots, and shares drawings in chat channels."},
     {"v32.2", "Update notices direct players to GitHub for the latest chips."},
     {"v32.1", "Fixed GitHub update detection for chatroom servers and shortened update checks to one minute."},
