@@ -1,10 +1,13 @@
 --@name Chatroom Computer
---@author v33.2
+--@author v33.5
 --@shared
 
-local CHIP_VERSION = "33.2"
+local CHIP_VERSION = "33.5"
 -- Get matching chip versions at https://github.com/Mooseyboi30/MaxwellOS
 local CHANGELOG = {
+    {"v33.5", "Added an occasional Calculator greeting."},
+    {"v33.4", "Expanded Calculator with scientific functions and degree/radian modes."},
+    {"v33.3", "Fixed the pocket computer HUD opening crash."},
     {"v33.2", "Restored the F3 Chatrooms shortcut and desktop header button."},
     {"v33.1", "Added a flood-fill bucket to Paint."},
     {"v33.0", "Added intermediate computer color presets and a scrollable theme list."},
@@ -1049,7 +1052,13 @@ local roomVersion = ""
 local channelName = "General"
 local showChannels = false
 local calculator = {entry = "", result = false}
-local CALCULATOR_KEYS = {"7", "8", "9", "/", "4", "5", "6", "*", "1", "2", "3", "-", "0", ".", "=", "+"}
+local CALCULATOR_KEYS = {
+    "sin", "cos", "tan", "sqrt", "x^2", "log",
+    "7", "8", "9", "/", "^", "ln",
+    "4", "5", "6", "*", "%", "pi",
+    "1", "2", "3", "-", "+/-", "e",
+    "0", ".", "=", "+", "Angle", "1/x"
+}
 local channelNames, selectedChannel = {}, 1
 local channelIds = {}
 local channelStatus = ""
@@ -1782,8 +1791,17 @@ function PHONE.paint.draw()
     label(22, 486, paint.message or "PgUp/PgDn palette | F fill | Space applies | 9 erases", muted, smallFont)
 end
 
+calculator.functions = {
+    sqrt = math.sqrt, ["x^2"] = function(x) return x * x end,
+    log = function(x) return math.log(x) / math.log(10) end, ln = math.log,
+    ["%"] = function(x) return x / 100 end, ["+/-"] = function(x) return -x end,
+    ["1/x"] = function(x) return 1 / x end,
+    sin = math.sin, cos = math.cos, tan = math.tan
+}
+
 local function calculatorInput(key)
     local state = calculator
+    if state.error and key == "=" then return end
     if key == "C" then
         state.entry, state.left, state.operator, state.error, state.result = "", nil, nil, nil, false
     elseif key == "Backspace" then
@@ -1796,7 +1814,29 @@ local function calculatorInput(key)
             if key == "." and (state.entry == "" or state.entry == "-") then state.entry = state.entry .. "0" end
             state.entry = state.entry .. key
         end
-    elseif key == "+" or key == "-" or key == "*" or key == "/" or key == "=" then
+    elseif key == "Angle" then
+        state.radians = not state.radians
+    elseif key == "pi" or key == "e" then
+        state.entry = string.format("%.15g", key == "pi" and math.pi or math.exp(1))
+        state.error, state.result = nil, not state.operator
+    elseif state.functions[key] then
+        local number = tonumber(state.entry)
+        if not number then return end
+        if key == "sin" or key == "cos" or key == "tan" then
+            if not state.radians then number = number * math.pi / 180 end
+            if key == "tan" and math.abs(math.cos(number)) < 1e-12 then
+                state.error = "Tangent is undefined."
+                return
+            end
+        end
+        local result = state.functions[key](number)
+        if result ~= result or math.abs(result) == math.huge then
+            state.error = "Undefined or out of range."
+        else
+            state.entry = string.format("%.15g", result)
+            state.error, state.result = nil, true
+        end
+    elseif key == "+" or key == "-" or key == "*" or key == "/" or key == "^" or key == "=" then
         local number = tonumber(state.entry)
         if not number then
             if key == "-" and state.entry == "" and not state.error then state.entry = "-"
@@ -1811,6 +1851,7 @@ local function calculatorInput(key)
             if state.operator == "+" then number = state.left + number
             elseif state.operator == "-" then number = state.left - number
             elseif state.operator == "*" then number = state.left * number
+            elseif state.operator == "^" then number = state.left ^ number
             else number = state.left / number end
         end
         if number ~= number or math.abs(number) == math.huge then
@@ -1842,9 +1883,9 @@ local function calculatorClick(x, y)
     end
     if y >= 146 and y < 177 and x >= 369 then
         calculatorInput("C")
-    elseif y >= 184 and y < 408 then
-        local col, row = math.floor((x - 16) / 120), math.floor((y - 184) / 56)
-        if (x - 16) % 120 < 113 and (y - 184) % 56 < 49 then calculatorInput(CALCULATOR_KEYS[row * 4 + col + 1]) end
+    elseif x >= 16 and x < 496 and y >= 180 and y < 415 then
+        local col, row = math.floor((x - 16) / 80), math.floor((y - 180) / 47)
+        if (x - 16) % 80 < 74 and (y - 180) % 47 < 41 then calculatorInput(CALCULATOR_KEYS[row * 6 + col + 1]) end
     end
     return true
 end
@@ -1857,6 +1898,17 @@ function PHONE.reportTyping(active)
     net.start("room_typing")
     net.writeBool(active)
     net.send()
+end
+
+function PHONE.geometry()
+    local sw, sh = render.getResolution()
+    -- Reserve a separate button row for the control lock.
+    local scale = math.min(0.90, math.max(0.38, (sh - 150) / 512))
+    local face = 512 * scale
+    local fw, fh = face + 28, face + 128
+    local x = math.max(12, sw - fw - 24)
+    local y = math.max(12, (sh - fh) * 0.5)
+    return x, y, scale, face, fw, fh
 end
 
 local function versionStatus(version)
@@ -2016,6 +2068,7 @@ local function changeGameTab(tab)
         timer.remove("room_website_screen_refresh")
         websiteFrame, websiteFrameSite = nil, nil
     end
+    if tab == "calculator" and gameTab ~= tab then calculator.streamGreeting = math.random(10) == 1 end
     gameTab = tab
     if tab == "website" then startWebsitePolling() end
     if tab ~= "menu" then lastApp = tab end
@@ -3731,15 +3784,18 @@ local function renderCalculator()
     label(26, 100, state.error or value, state.error and alertColor or ink)
     label(380, 151, "Clear  C", accent, smallFont)
     for i, key in ipairs(CALCULATOR_KEYS) do
-        local x, y = 16 + (i - 1) % 4 * 120, 184 + math.floor((i - 1) / 4) * 56
+        local x, y = 16 + (i - 1) % 6 * 80, 180 + math.floor((i - 1) / 6) * 47
         render.setColor(panel)
-        render.drawRect(x, y, 113, 49)
-        label(x + 48, y + 12, key, key == "=" and accent or ink)
+        render.drawRect(x, y, 74, 41)
+        local text = key == "Angle" and (state.radians and "RAD" or "DEG") or key
+        label(x + 12, y + 11, text, key == "=" and accent or ink)
     end
     render.setColor(panel)
     render.drawRect(369, 426, 127, 44)
     label(381, 438, "Desktop  F1", accent, smallFont)
-    label(22, 483, "Press E on buttons or use the Wiremod Keyboard.", muted, smallFont)
+    local hint = calculator.streamGreeting and "Calc (short for calculator for anyone new to the stream)"
+        or "Press E on buttons or use the Wiremod Keyboard."
+    label(22, 483, hint, muted, smallFont)
 end
 
 local websiteFonts, websiteFontCount = {}, 0
