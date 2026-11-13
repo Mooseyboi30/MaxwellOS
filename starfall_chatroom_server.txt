@@ -1,8 +1,8 @@
 --@name Chatroom Server
---@author v32.4
+--@author v32.6
 --@shared
 
-local CHIP_VERSION = "32.4"
+local CHIP_VERSION = "32.6"
 
 -- Match NETWORK in the computer chip. Set the room name and password on the linked screen.
 local NETWORK = "lobby"
@@ -853,16 +853,57 @@ timer.create("chatroom_board_sync", 0.5, 0, function()
     syncPosts()
 end)
 
+local function saveRoom()
+    local saved = setUserdata and getUserdata and pcall(function()
+        local lines = {"MaxwellOSRoom2", tostring(owner():getSteamID64()), roomName, password}
+        for _, id in ipairs(channelOrder) do
+            if id ~= 1 then lines[#lines + 1] = "C\t" .. channels[id].name end
+        end
+        for identity, entry in pairs(bans) do
+            lines[#lines + 1] = "B\t" .. identity .. "\t" .. entry.name
+        end
+        local record = table.concat(lines, "\n")
+        setUserdata(record)
+        assert(getUserdata() == record)
+    end)
+    if not saved then print("MaxwellOS: room settings could not be saved to this processor.") end
+    return saved
+end
+
 do
-    if getUserdata and json then
-        local ok, saved = pcall(function() return json.decode(getUserdata()) end)
-        if ok and type(saved) == "table" and saved.owner == owner():getSteamID64()
-            and type(saved.name) == "string" and #saved.name <= 28
-            and cleanChatText(saved.name) == saved.name and saved.name ~= ""
-            and not saved.name:find("[^ -~]") and not containsSlurInName(saved.name)
-            and type(saved.password) == "string" and #saved.password <= 64
-            and not saved.password:find("[^ -~]") then
-            roomName, password = saved.name, saved.password
+    if getUserdata then
+        local ok, raw = pcall(getUserdata)
+        if ok and type(raw) == "string" and #raw <= 1048576 then
+            local ownerId, name, secret, records = raw:match("^MaxwellOSRoom2\n([^\n]*)\n([^\n]*)\n([^\n]*)(.*)$")
+            if not ownerId then ownerId, name, secret = raw:match("^MaxwellOSRoom1\n([^\n]*)\n([^\n]*)\n([^\n]*)$") end
+            if not ownerId and json and raw ~= "" then
+                local decoded, saved = pcall(json.decode, raw)
+                if decoded and type(saved) == "table" then
+                    ownerId, name, secret = saved.owner, saved.name, saved.password
+                end
+            end
+            if tostring(ownerId) == tostring(owner():getSteamID64())
+                and type(name) == "string" and #name <= 28 and name ~= ""
+                and not name:find("[^ -~]") and cleanChatText(name) == name and not containsSlurInName(name)
+                and type(secret) == "string" and #secret <= 64 and not secret:find("[^ -~]") then
+                roomName, password = name, secret
+                local used = {general = true}
+                for line in (records or ""):gmatch("[^\n]+") do
+                    local channel = line:match("^C\t([ -~]+)$")
+                    local identity, bannedName = line:match("^B\t([ -~]+)\t([A-Za-z0-9_-]+)$")
+                    if channel and #channel <= 28 and #channelOrder < 12 and not used[channel:lower()]
+                        and not containsSlurInName(channel) then
+                        nextChannelId = nextChannelId + 1
+                        channels[nextChannelId] = {name = channel, history = {}, sequence = 0}
+                        channelOrder[#channelOrder + 1] = nextChannelId
+                        used[channel:lower()] = true
+                    elseif identity and #identity <= 64 and #bannedName <= 24 and not bans[identity] then
+                        sessionSequence = sessionSequence + 1
+                        local entry = {id = sessionSequence, identity = identity, name = bannedName}
+                        bans[identity], bansById[entry.id] = entry, entry
+                    end
+                end
+            end
         end
     end
 end
@@ -882,10 +923,7 @@ net.receive("chatroom_setup", function(_, ply)
         return
     end
     roomName, password = name, secret
-    local saved = setUserdata and json and pcall(function()
-        setUserdata(json.encode({owner = ply:getSteamID64(), name = name, password = secret}))
-    end)
-    if not saved then print("MaxwellOS: room settings could not be saved to this chip.") end
+    if saveRoom() then print("MaxwellOS: room settings saved to this processor.") end
     boardReady, boardDirty = true, true
     syncBoard()
 end)
@@ -917,6 +955,7 @@ net.receive("chatroom_create_channel", function(_, ply)
             channels[id].name = name
             result = "Channel renamed."
         end
+        if not saveRoom() then result = result .. " Save failed." end
         boardDirty = true
     end
     net.start("chatroom_channel_result")
@@ -936,6 +975,7 @@ net.receive("chatroom_delete_channel", function(_, ply)
     for _, session in pairs(sessions) do
         if session.channel == id then session.channel = 1 end
     end
+    saveRoom()
     if postsChannel == id then postsChannel, postsDirty = 1, true end
     boardDirty = true
 end)
@@ -992,6 +1032,7 @@ net.receive("chatroom_moderate", function(_, ply)
         local entry = bansById[id]
         if not entry then return end
         bans[entry.identity], bansById[id] = nil, nil
+        saveRoom()
         boardDirty = true
         syncBoard()
         return
@@ -1011,6 +1052,7 @@ net.receive("chatroom_moderate", function(_, ply)
     if action == 1 then
         local entry = {id = id, identity = target.identity, name = target.name}
         bans[target.identity], bansById[id] = entry, entry
+        saveRoom()
     end
     removePlayerFromRoom(target, removal, now)
 end)
