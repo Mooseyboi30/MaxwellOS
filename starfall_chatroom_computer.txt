@@ -1,10 +1,13 @@
 --@name Chatroom Computer
---@author v27.5
+--@author v29.7
 --@shared
 
-local CHIP_VERSION = "27.5"
+local CHIP_VERSION = "29.7"
 -- Get matching chip versions at https://github.com/Mooseyboi30/MaxwellOS
 local CHANGELOG = {
+    {"v29.7", "Added two-player Pong and gave Star Squadron enemy types, curved entrances, and diving attacks."},
+    {"v28.6", "Added Star Squadron, a solo arcade shooter with enemy formations and waves."},
+    {"v27.6", "Website Viewer supports the New Haiku button on the Haiku Generator site."},
     {"v27.5", "Added live typing indicators for the current chatroom channel."},
     {"v27.4", "Added GitHub update links and merged the pocket computer with lockable typing and private message alerts."},
     {"v27.3", "Website Viewer supports scrolling and purchase inquiry buttons on sites that publish them."},
@@ -600,6 +603,17 @@ net.receive("room_website_request", function(_, ply)
     net.send(ply)
 end)
 
+local nextWebsiteButton = 0
+net.receive("room_website_button", function(_, ply)
+    if ply ~= owner() or timer.curtime() < nextWebsiteButton then return end
+    local id = net.readUInt(16)
+    if id == 0 or id ~= requestedWebsiteId then return end
+    local site = entity(id)
+    if not site or not site:isValid() or site:getClass() ~= "starfall_processor" then return end
+    nextWebsiteButton = timer.curtime() + 0.5
+    pcall(hook.runRemote, site, "starfall_website_button_v1")
+end)
+
 local nextWebsiteDonation = 0
 net.receive("room_website_donate", function(_, ply)
     if ply ~= owner() or timer.curtime() < nextWebsiteDonation or net.getBytesLeft() < 192 then return end
@@ -945,12 +959,12 @@ net.receive("room_games_action", function(_, ply)
         gameVisible = false
         syncGames()
     elseif command == 1 then
-        local variant = ({[1] = "chess", [2] = "battleship", [3] = "trail"})[value] or "tic"
+        local variant = ({[1] = "chess", [2] = "battleship", [3] = "trail", [4] = "pong"})[value] or "tic"
         if hasWatchedMatch and variant ~= watchedVariant then return end
         watchingGames, gameVisible, gameRevision, gameNotice = true, true, -1, ""
         gamePollStatus = ""
         watchedVariant = variant
-        timer.create("chatroom_games_poll", 0.5, 0, syncGames)
+        timer.create("chatroom_games_poll", variant == "pong" and 0.12 or 0.5, 0, syncGames)
         syncGames()
     elseif command == 7 and watchingGames and watchedVariant == "chess"
         and gameRevision >= 0 and timer.curtime() >= nextChessHint and net.getBytesLeft() >= 256 then
@@ -965,7 +979,7 @@ net.receive("room_games_action", function(_, ply)
             syncGames()
             return
         end
-        nextGameAction = timer.curtime() + 0.15
+        nextGameAction = timer.curtime() + (watchedVariant == "pong" and 0.05 or 0.15)
         local reply = request(server, gameActions[command], value, watchedVariant)
         if reply and reply[1] == "ok" and (command == 2 or command == 3) then hasWatchedMatch = true end
         if reply and type(reply[1]) == "string" and reply[1] ~= "ok" then
@@ -1191,7 +1205,14 @@ function websiteControls.buy(x, y)
     if x then
         if x < buy[1] or x >= buy[1] + buy[3] or y < 0 or y >= 512 or y < top or y >= top + buy[4] then return end
     elseif top < 0 or top + buy[4] > 512 then return end
-    websiteControls.message = buy[5]
+    if buy[5] == "generate_haiku_v1" then
+        if net.getBytesLeft() < 32 then return end
+        net.start("room_website_button")
+        net.writeUInt(page.id, 16)
+        net.send()
+    else
+        websiteControls.message = buy[5]
+    end
 end
 
 local function requestWebsiteDonation(slot)
@@ -1213,6 +1234,8 @@ local function stepWebsite(delta)
     websiteControls.message = ""
 end
 local GAMES = {
+    {tab = "pong", name = "Pong", detail = "Two players in this room"},
+    {tab = "squadron", name = "Star Squadron", detail = "Solo arcade shooter"},
     {tab = "tic", name = "Tic-Tac-Toe", detail = "Two players in this chatroom"},
     {tab = "mines", name = "Minesweeper", detail = "Solo puzzles with No Guess"},
     {tab = "chess", name = "Chess", detail = "Two players in this chatroom"},
@@ -1236,7 +1259,7 @@ local function selectMenuTab(options)
     menuOptions, selectedGame = options, 0
 end
 local trailChoice = 1
-local MULTIPLAYER_TABS = {tic = 0, chess = 1, battleship = 2, trail = 3}
+local MULTIPLAYER_TABS = {tic = 0, chess = 1, battleship = 2, trail = 3, pong = 4}
 local battleshipCursor = 1
 local battleshipVertical = false
 local chessCursor, chessFrom, chessPromotion = 61, nil, false
@@ -1435,6 +1458,141 @@ local function label(x, y, value, color, face)
     render.setFont(face or font)
     render.setColor(color)
     render.drawText(x, y, value)
+end
+
+PHONE.squadron = {}
+
+function PHONE.squadron.wave()
+    PHONE.squadron.enemies, PHONE.squadron.shots, PHONE.squadron.bolts = {}, {}, {}
+    PHONE.squadron.time, PHONE.squadron.nextBolt, PHONE.squadron.nextDive = 0, 3.5, 4
+    for row = 1, 3 do
+        for column = 1, 8 do
+            local x, y = 95 + (column - 1) * 46, 105 + row * 35
+            PHONE.squadron.enemies[#PHONE.squadron.enemies + 1] = {
+                x = -32, y = 84, baseX = x, baseY = y, kind = row,
+                hp = row == 1 and 2 or 1,
+                arrive = (row - 1) * 0.65 + (column - 1) * 0.08
+            }
+        end
+    end
+end
+
+function PHONE.squadron.start()
+    PHONE.squadron.x, PHONE.squadron.score, PHONE.squadron.lives, PHONE.squadron.level = 256, 0, 3, 1
+    PHONE.squadron.wave()
+end
+
+function PHONE.squadron.key(key, enter)
+    if not PHONE.squadron.lives or PHONE.squadron.lives == 0 then
+        if enter then PHONE.squadron.start() end
+    elseif key == 19 or key == 20 then
+        PHONE.squadron.x = math.max(35, math.min(477, PHONE.squadron.x + (key == 19 and -18 or 18)))
+    elseif (key == 32 or enter) and #PHONE.squadron.shots < 6 then
+        PHONE.squadron.shots[#PHONE.squadron.shots + 1] = {x = PHONE.squadron.x, y = 411}
+    end
+end
+
+function PHONE.squadron.update(now)
+    local dt = math.min(0.05, math.max(0, now - (PHONE.squadron.lastTick or now)))
+    PHONE.squadron.lastTick = now
+    if not PHONE.squadron.lives or PHONE.squadron.lives == 0 then return end
+    PHONE.squadron.time = PHONE.squadron.time + dt
+    local enemies, shots, bolts = PHONE.squadron.enemies, PHONE.squadron.shots, PHONE.squadron.bolts
+    for _, enemy in ipairs(enemies) do
+        local t = PHONE.squadron.time
+        local age = t - enemy.arrive
+        local x = enemy.baseX + 44 * math.sin(t * 1.8)
+        local y = enemy.baseY + 10 * math.sin(t * 2 + enemy.baseX / 55)
+        enemy.active = age >= 0
+        if age < 2 then
+            local u = math.max(0, age / 2)
+            local side = enemy.kind % 2 == 0 and 1 or -1
+            local edge = 256 + side * 288
+            enemy.x = edge + (x - edge) * u - side * 78 * math.sin(math.pi * u)
+            enemy.y = 85 + (y - 85) * u + 125 * math.sin(math.pi * u)
+        elseif enemy.dive then
+            local u = (t - enemy.dive) / 2
+            if u >= 1 then
+                enemy.dive = nil
+                enemy.x, enemy.y = x, y
+            else
+                enemy.x = x + 66 * math.sin(2 * math.pi * u)
+                enemy.y = y + (393 - y) * math.sin(math.pi * u)
+            end
+        else
+            enemy.x, enemy.y = x, y
+        end
+    end
+    for i = #shots, 1, -1 do
+        local shot = shots[i]
+        shot.y = shot.y - 450 * dt
+        for j = #enemies, 1, -1 do
+            local enemy = enemies[j]
+            if enemy.active and math.abs(shot.x - enemy.x) < 15 and math.abs(shot.y - enemy.y) < 15 then
+                enemy.hp = enemy.hp - 1
+                if enemy.hp == 0 then
+                    table.remove(enemies, j)
+                    PHONE.squadron.score = PHONE.squadron.score + (4 - enemy.kind) * 75
+                end
+                shot.y = 0
+                break
+            end
+        end
+        if shot.y < 90 then table.remove(shots, i) end
+    end
+    if #enemies == 0 then
+        PHONE.squadron.level = PHONE.squadron.level + 1
+        PHONE.squadron.wave()
+        return
+    end
+    if PHONE.squadron.time >= PHONE.squadron.nextDive then
+        local divers = {}
+        for _, enemy in ipairs(enemies) do
+            if enemy.kind ~= 1 and not enemy.dive then divers[#divers + 1] = enemy end
+        end
+        if #divers > 0 then divers[math.random(#divers)].dive = PHONE.squadron.time end
+        PHONE.squadron.nextDive = PHONE.squadron.time + math.max(0.8, 2.8 - PHONE.squadron.level * 0.18)
+    end
+    if PHONE.squadron.time >= PHONE.squadron.nextBolt then
+        local enemy = enemies[math.random(#enemies)]
+        bolts[#bolts + 1] = {x = enemy.x, y = enemy.y + 10}
+        PHONE.squadron.nextBolt = PHONE.squadron.time + math.max(0.28, 1.1 - PHONE.squadron.level * 0.09)
+    end
+    for i = #bolts, 1, -1 do
+        local bolt = bolts[i]
+        bolt.y = bolt.y + 200 * dt
+        if math.abs(bolt.x - PHONE.squadron.x) < 15 and math.abs(bolt.y - 425) < 13 then
+            PHONE.squadron.lives = PHONE.squadron.lives - 1
+            PHONE.squadron.bolts = {}
+            return
+        end
+        if bolt.y > 453 then table.remove(bolts, i) end
+    end
+end
+
+function PHONE.squadron.draw()
+    if not PHONE.squadron.lives then
+        label(22, 100, "Press Enter to start", accent)
+        return
+    end
+    label(22, 83, "Score " .. PHONE.squadron.score .. "    Wave " .. PHONE.squadron.level .. "    Lives " .. PHONE.squadron.lives, ink)
+    if PHONE.squadron.lives == 0 then
+        label(22, 155, "Game over. Press Enter to restart.", alertColor)
+        return
+    end
+    render.setColor(accent)
+    render.drawRect(PHONE.squadron.x - 14, 426, 28, 9)
+    render.drawRect(PHONE.squadron.x - 4, 416, 8, 12)
+    for _, shot in ipairs(PHONE.squadron.shots) do render.drawRect(shot.x - 2, shot.y, 4, 10) end
+    render.setColor(alertColor)
+    for _, enemy in ipairs(PHONE.squadron.enemies) do
+        render.setColor(enemy.kind == 1 and alertColor or (enemy.kind == 2 and accent or ink))
+        render.drawRect(enemy.x - 12, enemy.y - 5, 24, 10)
+        if enemy.hp == 2 then render.drawRect(enemy.x - 16, enemy.y - 8, 32, 3) end
+        render.drawRect(enemy.x - 7, enemy.y - 10, 14, 20)
+    end
+    for _, bolt in ipairs(PHONE.squadron.bolts) do render.drawRect(bolt.x - 2, bolt.y, 4, 8) end
+    label(22, 480, "Left/Right moves  |  Space or Enter fires  |  F1 Desktop", muted, smallFont)
 end
 
 local function calculatorInput(key)
@@ -2581,6 +2739,11 @@ if isOwner then
         if settings.waiting and timer.curtime() >= settings.waiting then
             settings.waiting, settings.message = nil, "No name change confirmation. Try again."
         end
+        if poweredOn and gameTab == "squadron" and timer.curtime() >= startupUntil then
+            PHONE.squadron.update(timer.curtime())
+        else
+            PHONE.squadron.lastTick = nil
+        end
         if poweredOn and gameTab == "mines" and mineSearch and not mineSearch() then mineSearch = nil end
         if waitingUntil and timer.curtime() >= waitingUntil then
             waitingUntil = nil
@@ -2675,6 +2838,7 @@ if isOwner then
             elseif enter then enterSelectedGame() end
             return
         end
+        if gameTab == "squadron" then PHONE.squadron.key(key, enter); return end
         if gameTab == "mines" then
             if key == 8 or key == 127 then changeGameTab("menu")
             else handleMines(key, enter) end
@@ -2690,6 +2854,9 @@ if isOwner then
                     handleChess(key, enter, character)
                 elseif gameTab == "battleship" then
                     handleBattleship(key, enter)
+                elseif gameTab == "pong" then
+                    if key == 17 then sendGameAction(4, 1)
+                    elseif key == 18 then sendGameAction(4, 2) end
                 elseif gameTab == "trail" then
                     handleTrail(key, enter, character)
                 elseif key >= 49 and key <= 57 then
@@ -3295,6 +3462,22 @@ local function renderMatchTab()
         renderBattleship(currentGame)
     elseif gameTab == "trail" then
         renderTrailGame(currentGame)
+    elseif gameTab == "pong" and currentGame.pong then
+        local game, ball = currentGame, currentGame.pong
+        render.setColor(panel)
+        render.drawRect(36, 120, 440, 300)
+        render.setColor(muted)
+        render.drawRect(255, 120, 2, 300)
+        render.setColor(accent)
+        render.drawRect(46, 120 + ball.left - 32, 8, 64)
+        render.drawRect(458, 120 + ball.right - 32, 8, 64)
+        render.setColor(ink)
+        render.drawRect(36 + ball.x - 4, 120 + ball.y - 4, 8, 8)
+        label(36, 87, game.host .. " " .. ball.a .. "  |  " .. ball.b .. " " .. game.guest, ink)
+        local hint = game.guest == "" and "Waiting for another player"
+            or (game.winner ~= "" and (game.winner == game.mark and "You won!  R rematch" or "You lost.  R rematch")
+            or "Up/Down moves your paddle  |  First to 7")
+        label(36, 448, hint, accent)
     else
         local game = currentGame
         local opponent = game.mark == "X" and game.guest or game.host
@@ -3603,6 +3786,7 @@ local function renderAppsPanel()
         label(381, 438, "Back to Apps", accent, smallFont)
         label(22, 483, "Backspace returns to Apps.", muted, smallFont)
     elseif gameTab == "payments" then renderPayments()
+    elseif gameTab == "squadron" then PHONE.squadron.draw()
     elseif gameTab == "mines" then renderMines()
     else renderMatchTab() end
 end
@@ -3694,9 +3878,11 @@ function PHONE.drawComputerScreen()
     elseif gameTab == "settings" then title = "Settings"
     elseif gameTab == "hud" then title = "HUD"
     elseif gameTab == "tic" then title = "Tic-Tac-Toe"
+    elseif gameTab == "squadron" then title = "Star Squadron"
     elseif gameTab == "mines" then title = "Minesweeper"
     elseif gameTab == "chess" then title = "Chess"
     elseif gameTab == "battleship" then title = "Battleship"
+    elseif gameTab == "pong" then title = "Pong"
     elseif gameTab == "trail" then title = "Oregon Trail"
     elseif showPayments then title = "Payments"
     elseif showPrivate then title = "Private messages"

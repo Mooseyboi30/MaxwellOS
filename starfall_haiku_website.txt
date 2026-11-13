@@ -1,0 +1,157 @@
+--@name Haiku Generator
+--@author v27.6
+--@shared
+
+local NAME = "Haiku Generator"
+local FONT = {"Roboto", 23, 500}
+local BUTTON = {512, 64, 360, 384, 64, "generate_haiku_v1"}
+-- Each theme supplies connected subjects, actions, and places.
+-- Entries pair text with its spoken syllable count.
+local themes = {
+    {
+        subjects = {{"rain", 1}, {"mist", 1}, {"the river", 3}},
+        actions = {{"falls", 1}, {"drifts", 1}, {"lingers", 2}},
+        places = {{"on stone", 2}, {"by the shore", 3}, {"across the lake", 4}}
+    },
+    {
+        subjects = {{"wind", 1}, {"a leaf", 2}, {"the autumn wind", 4}},
+        actions = {{"turns", 1}, {"drifts", 1}, {"whispers", 2}},
+        places = {{"past trees", 2}, {"through the pines", 3}, {"across the field", 4}}
+    },
+    {
+        subjects = {{"dawn", 1}, {"light", 1}, {"the morning light", 4}},
+        actions = {{"shines", 1}, {"spreads", 1}, {"gathers", 2}},
+        places = {{"on snow", 2}, {"through the clouds", 3}, {"across the hills", 4}}
+    },
+    {
+        subjects = {{"the tide", 2}, {"sea foam", 2}, {"a wave", 2}, {"the ocean", 3}},
+        actions = {{"rolls", 1}, {"breaks", 1}, {"settles", 2}},
+        places = {{"on sand", 2}, {"against the rocks", 4}, {"along the coast", 4}}
+    },
+    {
+        subjects = {{"a fox", 2}, {"a hare", 2}, {"a field mouse", 3}, {"the red squirrel", 4}},
+        actions = {{"hides", 1}, {"waits", 1}, {"wanders", 2}},
+        places = {{"in shade", 2}, {"beneath the fern", 4}, {"beside the stream", 4}}
+    },
+    {
+        subjects = {{"the snow", 2}, {"the frost", 2}, {"the winter air", 4}, {"a snowflake", 3}},
+        actions = {{"rests", 1}, {"falls", 1}, {"settles", 2}},
+        places = {{"on ice", 2}, {"across the roof", 4}, {"above the road", 4}}
+    },
+    {
+        subjects = {{"a bee", 2}, {"a moth", 2}, {"a dragonfly", 4}, {"a ladybug", 4}},
+        actions = {{"flies", 1}, {"rests", 1}, {"hovers", 2}},
+        places = {{"near blooms", 2}, {"around the rose", 4}, {"above the grass", 4}}
+    },
+    {
+        subjects = {{"the moon", 2}, {"a star", 2}, {"the evening sky", 4}, {"the northern light", 4}},
+        actions = {{"glows", 1}, {"fades", 1}, {"shimmers", 2}},
+        places = {{"at dusk", 2}, {"above the ridge", 4}, {"behind the clouds", 4}}
+    },
+    {
+        subjects = {{"the fog", 2}, {"the smoke", 2}, {"a soft gray haze", 4}, {"a plume of steam", 4}},
+        actions = {{"rises", 2}, {"drifts", 1}, {"curls", 1}},
+        places = {{"past lamps", 2}, {"along the street", 4}, {"between the homes", 4}}
+    },
+    {
+        subjects = {{"a crow", 2}, {"a barn owl", 3}, {"a sparrow", 3}, {"the meadowlark", 4}},
+        actions = {{"calls", 1}, {"sings", 1}, {"listens", 2}},
+        places = {{"at dawn", 2}, {"beyond the gate", 4}, {"above the field", 4}}
+    },
+    {
+        subjects = {{"the creek", 2}, {"a stream", 2}, {"the waterfall", 4}, {"a spring", 2}},
+        actions = {{"flows", 1}, {"runs", 1}, {"ripples", 2}},
+        places = {{"past stones", 2}, {"beneath the bridge", 4}, {"through the valley", 4}}
+    }
+}
+local poem, recentPoems = {}, {}
+local sokka = false
+local interval = 15
+local nextPoemAt
+
+local function buildLine(theme, target)
+    local choices = {}
+    for _, subject in ipairs(theme.subjects) do
+        for _, action in ipairs(theme.actions) do
+            for _, place in ipairs(theme.places) do
+                if subject[2] + action[2] + place[2] == target then
+                    choices[#choices + 1] = subject[1] .. " " .. action[1] .. " " .. place[1]
+                end
+            end
+        end
+    end
+    local line = choices[math.random(#choices)]
+    return line:sub(1, 1):upper() .. line:sub(2)
+end
+
+local function generate()
+    nextPoemAt = timer.curtime() + interval
+    local theme = themes[math.random(#themes)]
+    sokka = math.random(10) == 1
+    for attempt = 1, 12 do
+        local candidate = {buildLine(theme, 5), buildLine(theme, 7), buildLine(theme, sokka and 6 or 5)}
+        local key = table.concat(candidate, "\n")
+        local repeated = false
+        for _, previous in ipairs(recentPoems) do
+            if previous == key then repeated = true; break end
+        end
+        if not repeated or attempt == 12 then
+            poem = candidate
+            recentPoems[#recentPoems + 1] = key
+            if #recentPoems > 24 then table.remove(recentPoems, 1) end
+            break
+        end
+    end
+end
+
+generate()
+timer.create("haiku_auto_generate", 0.25, 0, function()
+    if timer.curtime() >= nextPoemAt then generate() end
+end)
+
+local function frame()
+    local seconds = math.max(0, math.ceil(nextPoemAt - timer.curtime()))
+    return {
+        {"rect", 0, 0, 512, 512, 19, 27, 42},
+        {"rect", 32, 112, 448, 208, 33, 54, 77},
+        {"text", 38, 44, 436, 32, 233, 244, 251, sokka and "Sokka Haiku (5-7-6)" or NAME},
+        {"text", 60, 150, 392, 32, 233, 244, 251, poem[1]},
+        {"text", 60, 204, 392, 32, 233, 244, 251, poem[2]},
+        {"text", 60, 258, 392, 32, 233, 244, 251, poem[3]},
+        {"rect", 64, 360, 384, 64, 31, 105, 94},
+        {"text", 90, 379, 332, 32, 255, 255, 255, "New Haiku"},
+        {"text", 64, 450, 384, 32, 198, 222, 239, "Next haiku in " .. seconds .. "s  |  E for a new poem"}
+    }
+end
+
+if SERVER then
+    local nextGenerate = 0
+    hook.add("remote", "haiku_site", function(_, _, protocol)
+        if protocol == "starfall_website_discover_v1" then
+            return chip():entIndex(), NAME
+        elseif protocol == "starfall_website_page_v1" then
+            return chip():entIndex(), NAME, NAME, {"Press E on New Haiku."}, false, FONT, false, false, BUTTON
+        elseif protocol == "starfall_website_screen_v1" then
+            return frame()
+        elseif protocol == "starfall_website_button_v1" and timer.curtime() >= nextGenerate then
+            nextGenerate = timer.curtime() + 0.3
+            generate()
+        end
+    end)
+else
+    local font = render.createFont(unpack(FONT))
+    hook.add("StarfallUsed", "haiku_button", function(user, screen)
+        if user ~= player() or not screen or not screen:isValid() or screen:getClass() ~= "starfall_screen" then return end
+        local x, y = render.cursorPos(user, screen)
+        if x and y and x >= 64 and x < 448 and y >= 360 and y < 424 then generate() end
+    end)
+    hook.add("render", "haiku_screen", function()
+        render.setFont(font)
+        for _, command in ipairs(frame()) do
+            local kind, x, y, w, h, r, g, b, text = unpack(command)
+            render.setColor(Color(r, g, b))
+            if kind == "rect" then render.drawRect(x, y, w, h)
+            else render.drawText(x, y, text) end
+        end
+    end)
+end

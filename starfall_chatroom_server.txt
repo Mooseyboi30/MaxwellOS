@@ -1,10 +1,10 @@
 --@name Chatroom Server
---@author v27.5
+--@author v29.7
 --@shared
 
 -- Match NETWORK in the computer chip. Set the room name and password on the linked screen.
 local NETWORK = "lobby"
-local CHIP_VERSION = "27.5"
+local CHIP_VERSION = "29.7"
 -- Get matching chip versions at https://github.com/Mooseyboi30/MaxwellOS
 local POSTS_TOP, POSTS_BOTTOM = 160, 480
 local POSTS_TRACK_X = 473
@@ -27,7 +27,7 @@ local filterStrikes = {}
 local nextJoin = {}
 local sessions = {}
 local games = {}
-local MULTIPLAYER_GAME_NAMES = {tic = "Tic-Tac-Toe", chess = "Chess", battleship = "Battleship", trail = "Oregon Trail"}
+local MULTIPLAYER_GAME_NAMES = {tic = "Tic-Tac-Toe", chess = "Chess", battleship = "Battleship", trail = "Oregon Trail", pong = "Pong"}
 local gameSequence, gameRevision = 0, 0
 local WIN_LINES = {{1,2,3}, {4,5,6}, {7,8,9}, {1,4,7}, {2,5,8}, {3,6,9}, {1,5,9}, {3,5,7}}
 local bans = {}
@@ -352,6 +352,9 @@ local function battleshipBoards(game, mark)
 end
 
 local function resetGame(game)
+    if game.variant == "pong" then
+        game.pong = {x = 220, y = 150, left = 150, right = 150, a = 0, b = 0, vx = 165, vy = 88}
+    end
     game.board = game.variant == "chess" and CHESS_START or "........."
     game.turn, game.winner, game.rematchRequester = "X", "", nil
     game.rights, game.enPassant = "KQkq", nil
@@ -578,6 +581,7 @@ local function gameAction(session, action, value, variant)
                 rematchRequested = session == game.rematchRequester,
                 opponentRequested = game.rematchRequester ~= nil and session ~= game.rematchRequester
             }
+            if variant == "pong" then current.pong = game.pong end
             if variant == "battleship" then
                 current.target, current.fleet = battleshipBoards(game, current.mark)
                 current.lastShot = game.lastShot
@@ -677,6 +681,14 @@ local function gameAction(session, action, value, variant)
     elseif action == "game_move" then
         local game = session.game
         if not game or game.variant ~= variant then return "Join a match first." end
+        if variant == "pong" then
+            if not game.guest or game.winner ~= "" then return end
+            if value ~= 1 and value ~= 2 then return end
+            local paddle = session == game.host and "left" or "right"
+            game.pong[paddle] = math.max(32, math.min(268, game.pong[paddle] + (value == 1 and -28 or 28)))
+            gameRevision = gameRevision + 1
+            return "ok"
+        end
         if variant == "trail" then
             if value == 10 and not game.trail and session == game.host then
                 game.trail = newTrail()
@@ -982,6 +994,35 @@ net.receive("chatroom_moderate", function(_, ply)
         bans[target.identity], bansById[id] = entry, entry
     end
     removePlayerFromRoom(target, removal, now)
+end)
+
+timer.create("chatroom_pong", 0.05, 0, function()
+    for _, game in pairs(games) do
+        if game.pong and game.guest and game.winner == "" then
+            local ball = game.pong
+            local x, y = ball.x + ball.vx * 0.05, ball.y + ball.vy * 0.05
+            if y <= 4 or y >= 296 then
+                y = math.max(4, math.min(296, y))
+                ball.vy = -ball.vy
+            end
+            local left = ball.vx < 0 and ball.x >= 22 and x <= 22
+            local right = ball.vx > 0 and ball.x <= 418 and x >= 418
+            if (left or right) and math.abs(y - (left and ball.left or ball.right)) <= 36 then
+                x = left and 22 or 418
+                ball.vx = (left and 1 or -1) * math.min(420, math.abs(ball.vx) + 18)
+                ball.vy = (y - (left and ball.left or ball.right)) * 5
+            end
+            if x < 0 or x > 440 then
+                local point = x < 0 and "b" or "a"
+                ball[point] = ball[point] + 1
+                if ball[point] >= 7 then game.winner = point == "a" and "X" or "O" end
+                x, y = 220, 150
+                ball.vx, ball.vy = point == "a" and 165 or -165, math.random(2) == 1 and 88 or -88
+            end
+            ball.x, ball.y = x, y
+            gameRevision = gameRevision + 1
+        end
+    end
 end)
 
 hook.add("remote", "chatroom", function(sender, senderOwner, protocol, network, action, value, extra)
