@@ -1,8 +1,8 @@
 --@name Chatroom Server
---@author v33.0
+--@author v33.2
 --@shared
 
-local CHIP_VERSION = "33.0"
+local CHIP_VERSION = "33.2"
 
 -- Match NETWORK in the computer chip. Set the room name and password on the linked screen.
 local NETWORK = "lobby"

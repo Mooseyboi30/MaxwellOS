@@ -1,10 +1,12 @@
 --@name Chatroom Computer
---@author v33.0
+--@author v33.2
 --@shared
 
-local CHIP_VERSION = "33.0"
+local CHIP_VERSION = "33.2"
 -- Get matching chip versions at https://github.com/Mooseyboi30/MaxwellOS
 local CHANGELOG = {
+    {"v33.2", "Restored the F3 Chatrooms shortcut and desktop header button."},
+    {"v33.1", "Added a flood-fill bucket to Paint."},
     {"v33.0", "Added intermediate computer color presets and a scrollable theme list."},
     {"v32.9", "Paint adds a scrollable 34-color palette, direct sharing from save slots, and chat thumbnails."},
     {"v32.7", "Room setup, channels, and bans persist across uploads. Fixed a Starfall pattern-limit error when restoring them."},
@@ -1541,11 +1543,9 @@ PHONE.paint = {
         Color(110, 73, 53), Color(151, 151, 163)}
 }
 
-function PHONE.paint.pixel(x, y)
+function PHONE.paint.rebuildRow(y)
     local paint = PHONE.paint
     local row = paint.rows[y] or {}
-    paint.rows[y] = row
-    row[x] = paint.palette[paint.color] and paint.color or nil
     local runs = {}
     local previous
     for column = 1, 50 do
@@ -1558,6 +1558,53 @@ function PHONE.paint.pixel(x, y)
         previous = color
     end
     paint.runs[y] = runs
+end
+
+function PHONE.paint.pixel(x, y)
+    local paint = PHONE.paint
+    local row = paint.rows[y] or {}
+    paint.rows[y] = row
+    row[x] = paint.palette[paint.color] and paint.color or nil
+    paint.rebuildRow(y)
+end
+
+function PHONE.paint.fill(x, y)
+    local paint = PHONE.paint
+    local target = (paint.rows[y] or {})[x]
+    local replacement = paint.palette[paint.color] and paint.color or nil
+    if target == replacement then return end
+
+    local queue, changed = {}, {}
+    local function visit(column, rowIndex)
+        local row = paint.rows[rowIndex]
+        if (row and row[column] or nil) ~= target then return end
+        if not row then
+            row = {}
+            paint.rows[rowIndex] = row
+        end
+        row[column] = replacement
+        changed[rowIndex] = true
+        queue[#queue + 1] = (rowIndex - 1) * 50 + column - 1
+    end
+
+    visit(x, y)
+    local head = 1
+    while head <= #queue do
+        local index = queue[head]
+        local column, rowIndex = index % 50 + 1, math.floor(index / 50) + 1
+        if column > 1 then visit(column - 1, rowIndex) end
+        if column < 50 then visit(column + 1, rowIndex) end
+        if rowIndex > 1 then visit(column, rowIndex - 1) end
+        if rowIndex < 50 then visit(column, rowIndex + 1) end
+        head = head + 1
+    end
+    for rowIndex in pairs(changed) do paint.rebuildRow(rowIndex) end
+end
+
+function PHONE.paint.apply()
+    local paint = PHONE.paint
+    if paint.bucket then paint.fill(paint.x, paint.y)
+    else paint.pixel(paint.x, paint.y) end
 end
 
 function PHONE.paint.colorIndex(byte)
@@ -1649,11 +1696,13 @@ end
 
 function PHONE.paint.click(x, y)
     local paint = PHONE.paint
-    if x >= 16 and x < 50 and y >= 395 and y < 455 then
+    if x >= 16 and x < 50 and y >= 340 and y < 384 then
+        paint.bucket, paint.pen, paint.message = not paint.bucket, false, nil
+    elseif x >= 16 and x < 50 and y >= 395 and y < 455 then
         paint.action("sendSlot")
     elseif x >= 56 and x < 456 and y >= 78 and y < 478 then
         paint.x, paint.y = math.floor((x - 56) / 8) + 1, math.floor((y - 78) / 8) + 1
-        paint.pixel(paint.x, paint.y)
+        paint.apply()
     elseif x >= 466 and x < 496 and y >= 78 and y < 365 then
         if y < 101 then paint.scrollPalette(-1)
         elseif y >= 343 then paint.scrollPalette(1)
@@ -1676,7 +1725,9 @@ function PHONE.paint.key(key, enter)
     elseif key == 152 then paint.scrollPalette(7)
     elseif key >= 49 and key <= 55 then paint.color = paint.paletteTop + key - 49
     elseif key == 57 then paint.color = 0
-    elseif enter or key == 32 then paint.pixel(paint.x, paint.y)
+    elseif enter or key == 32 then paint.apply()
+    elseif key == 70 or key == 102 then
+        paint.bucket, paint.pen, paint.message = not paint.bucket, false, nil
     elseif key == 17 or key == 18 or key == 19 or key == 20 then
         if key == 17 then paint.y = math.max(1, paint.y - 1)
         elseif key == 18 then paint.y = math.min(50, paint.y + 1)
@@ -1684,6 +1735,7 @@ function PHONE.paint.key(key, enter)
         else paint.x = math.min(50, paint.x + 1) end
         if paint.pen then paint.pixel(paint.x, paint.y) end
     elseif key == 66 or key == 98 then
+        paint.bucket = false
         paint.pen = not paint.pen
         if paint.pen then paint.pixel(paint.x, paint.y) end
     end
@@ -1721,10 +1773,13 @@ function PHONE.paint.draw()
     end
     render.setColor(panel)
     render.drawRect(16, 395, 34, 60)
+    render.setColor(paint.bucket and accent or panel)
+    render.drawRect(16, 340, 34, 44)
+    label(21, 352, "Fill", paint.bucket and background or ink, smallFont)
     label(20, 400, "Send", accent, smallFont)
     label(20, 418, "slot", accent, smallFont)
     label(20, 436, "G", muted, smallFont)
-    label(22, 486, paint.message or "PgUp/PgDn palette | 1-7 picks | 9 erases | Space draws", muted, smallFont)
+    label(22, 486, paint.message or "PgUp/PgDn palette | F fill | Space applies | 9 erases", muted, smallFont)
 end
 
 local function calculatorInput(key)
@@ -2493,7 +2548,10 @@ if isOwner then
                 return
             end
             if computerName ~= "" and not joining and not versionWarning and not showPrivate and not showChannels then
-                if x >= 369 and y >= 8 and y < 39 then
+                if gameTab == "menu" and x >= 236 and x < 365 and y >= 8 and y < 39 then
+                    changeGameTab(nil)
+                    return
+                elseif x >= 369 and y >= 8 and y < 39 then
                     playChatSound("game")
                     toggleLastApp()
                     return
@@ -2978,6 +3036,10 @@ if isOwner then
             end
             return
         end
+        if key == 165 then
+            if gameTab and not joinUntil then changeGameTab(nil) end
+            return
+        end
         if key == 163 then
             toggleLastApp()
             return
@@ -3176,7 +3238,7 @@ if isOwner then
         [KEY.BACKSPACE] = 8, [KEY.SPACE] = 32,
         [KEY.UP] = 17, [KEY.DOWN] = 18, [KEY.LEFT] = 19, [KEY.RIGHT] = 20,
         [KEY.PAGEUP] = 151, [KEY.PAGEDOWN] = 152,
-        [KEY.F1] = 163, [KEY.F2] = 164,
+        [KEY.F1] = 163, [KEY.F2] = 164, [KEY.F3] = 165,
         [KEY.F5] = 167, [KEY.F6] = 168, [KEY.F7] = 169,
         [KEY.SLASH] = 47, [KEY.PERIOD] = 46, [KEY.COMMA] = 44,
         [KEY.MINUS] = 45, [KEY.EQUAL] = 61,
@@ -3970,6 +4032,10 @@ function PHONE.drawComputerScreen()
     if not joining and not versionWarning then
         render.setColor(background)
         render.drawRect(369, 8, 127, 31)
+        if gameTab == "menu" then
+            render.drawRect(236, 8, 129, 31)
+            label(247, 15, "F3 Chatrooms", accent, smallFont)
+        end
         local shortcut = gameTab == "menu" and "F1 Last app" or "F1 Desktop"
         label(380, 15, shortcut, accent, smallFont)
         if gameTab then
