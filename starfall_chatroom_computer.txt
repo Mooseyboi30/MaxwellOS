@@ -1,10 +1,11 @@
 --@name Chatroom Computer
---@author v30.9
+--@author v31.9
 --@shared
 
-local CHIP_VERSION = "30.9"
+local CHIP_VERSION = "31.9"
 -- Get matching chip versions at https://github.com/Mooseyboi30/MaxwellOS
 local CHANGELOG = {
+    {"v31.9", "Added Paint, a desktop app with a 100x100 pixel canvas."},
     {"v30.9", "Added GitHub update checks to both MaxwellOS chips."},
     {"v30.7", "MaxwellOS remembers your computer name and theme. Room chips save their name and optional password in chip userdata."},
     {"v29.7", "Added two-player Pong and gave Star Squadron enemy types, curved entrances, and diving attacks."},
@@ -1113,7 +1114,8 @@ local APPS = {
     {tab = "hud", name = "HUD", detail = "Toggle the chat overlay"},
     {tab = "payments", name = "Payments", detail = "Send in-game money", needsRoom = true},
     {tab = "changelog", name = "Changelog", detail = "Browse release history"},
-    {tab = "settings", name = "Settings", detail = "Colors and computer name"}
+    {tab = "settings", name = "Settings", detail = "Colors and computer name"},
+    {tab = "paint", name = "Paint", detail = "100 x 100 pixel canvas"}
 }
 local menuOptions = APPS
 local LAUNCHER_TOP, TILE_WIDTH, TILE_HEIGHT, TILE_GAP = 132, 232, 68, 16
@@ -1477,6 +1479,83 @@ function PHONE.squadron.draw()
     end
     for _, bolt in ipairs(PHONE.squadron.bolts) do render.drawRect(bolt.x - 2, bolt.y, 4, 8) end
     label(22, 480, "Left/Right moves  |  Space or Enter fires  |  F1 Desktop", muted, smallFont)
+end
+
+PHONE.paint = {
+    x = 50, y = 50, color = 1, rows = {}, runs = {},
+    palette = {Color(20, 20, 28), Color(220, 55, 68), Color(245, 145, 45),
+        Color(249, 212, 65), Color(49, 164, 102), Color(55, 113, 220),
+        Color(153, 79, 213), Color(255, 255, 255)}
+}
+
+function PHONE.paint.pixel(x, y)
+    local paint = PHONE.paint
+    local row = paint.rows[y] or {}
+    paint.rows[y] = row
+    row[x] = paint.palette[paint.color] and paint.color or nil
+    local runs = {}
+    local previous
+    for column = 1, 100 do
+        local color = row[column]
+        if color and color ~= previous then
+            runs[#runs + 1] = {column, 1, color}
+        elseif color then
+            runs[#runs][2] = runs[#runs][2] + 1
+        end
+        previous = color
+    end
+    paint.runs[y] = runs
+end
+
+function PHONE.paint.click(x, y)
+    local paint = PHONE.paint
+    if x >= 56 and x < 456 and y >= 78 and y < 478 then
+        paint.x, paint.y = math.floor((x - 56) / 4) + 1, math.floor((y - 78) / 4) + 1
+        paint.pixel(paint.x, paint.y)
+    elseif x >= 466 and x < 496 and y >= 84 and y < 84 + 9 * 32 then
+        paint.color = math.floor((y - 84) / 32) + 1
+    end
+end
+
+function PHONE.paint.key(key, enter)
+    local paint = PHONE.paint
+    if key >= 49 and key <= 57 then paint.color = key - 48
+    elseif enter or key == 32 then paint.pixel(paint.x, paint.y)
+    elseif key == 17 or key == 18 or key == 19 or key == 20 then
+        if key == 17 then paint.y = math.max(1, paint.y - 1)
+        elseif key == 18 then paint.y = math.min(100, paint.y + 1)
+        elseif key == 19 then paint.x = math.max(1, paint.x - 1)
+        else paint.x = math.min(100, paint.x + 1) end
+        if paint.pen then paint.pixel(paint.x, paint.y) end
+    elseif key == 66 or key == 98 then
+        paint.pen = not paint.pen
+        if paint.pen then paint.pixel(paint.x, paint.y) end
+    end
+end
+
+function PHONE.paint.draw()
+    local paint = PHONE.paint
+    render.setColor(paint.palette[8])
+    render.drawRect(56, 78, 400, 400)
+    for y, runs in pairs(paint.runs) do
+        for _, run in ipairs(runs) do
+            render.setColor(paint.palette[run[3]])
+            render.drawRect(56 + (run[1] - 1) * 4, 78 + (y - 1) * 4, run[2] * 4, 4)
+        end
+    end
+    render.setColor(Color(255, 90, 130))
+    render.drawRectOutline(55 + (paint.x - 1) * 4, 77 + (paint.y - 1) * 4, 6, 6)
+    for i = 1, 9 do
+        local y = 84 + (i - 1) * 32
+        render.setColor(paint.palette[i] or panel)
+        render.drawRect(466, y, 30, 26)
+        if i == paint.color then
+            render.setColor(accent)
+            render.drawRectOutline(465, y - 1, 32, 28)
+        end
+    end
+    label(472, 343, "E", ink, smallFont)
+    label(22, 486, "Arrows  |  Space draws  |  B pen  |  1-8 colors  |  9 erases", muted, smallFont)
 end
 
 local function calculatorInput(key)
@@ -2259,6 +2338,7 @@ if isOwner then
                         settings.saveName()
                     end
                     return
+                elseif gameTab == "paint" then PHONE.paint.click(x, y); return
                 elseif gameTab == "changelog" then
                     if y >= 414 and y < 454 then
                         if x < 136 then changelogPage = math.min(#CHANGELOG, changelogPage + 1)
@@ -2592,6 +2672,7 @@ if isOwner then
             end
             return
         end
+        if gameTab == "paint" then PHONE.paint.key(key, enter); return end
         if gameTab == "changelog" then
             if key == 19 or key == 151 then changelogPage = math.min(#CHANGELOG, changelogPage + 1)
             elseif key == 20 or key == 152 then changelogPage = math.max(1, changelogPage - 1)
@@ -3554,6 +3635,7 @@ local function renderAppsPanel()
     if gameTab == "menu" then renderGameMenu()
     elseif gameTab == "calculator" then renderCalculator()
     elseif gameTab == "website" then renderWebsite()
+    elseif gameTab == "paint" then PHONE.paint.draw()
     elseif gameTab == "changelog" then renderChangelog()
     elseif gameTab == "settings" then
         render.setColor(panel)
@@ -3637,6 +3719,7 @@ function PHONE.drawComputerScreen()
     if gameTab == "menu" then title = "Desktop"
     elseif gameTab == "calculator" then title = "Calculator"
     elseif gameTab == "website" then title = "Website Viewer"
+    elseif gameTab == "paint" then title = "Paint"
     elseif gameTab == "changelog" then title = "Changelog"
     elseif gameTab == "settings" then title = "Settings"
     elseif gameTab == "hud" then title = "HUD"
