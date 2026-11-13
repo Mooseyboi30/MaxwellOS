@@ -8,3 +8,5 @@ A Starfall computer for Garry's Mod with a desktop launcher, chatrooms, a websit
 2. Wire a Wiremod Keyboard's Keys and User outputs to KeyboardKeys and KeyboardUser. The optional Power input turns the display off at 0.
 3. Upload the chatroom server chip to host chat, or a website chip to publish a site. Open Chatrooms or Website Viewer from the desktop.
 4. Use the standalone demo chip for Calculator and Minesweeper without a chatroom or website server.
+
+   Congrats to https://steamcommunity.com/id/notanotherminge/ for making his OS link with my server base
