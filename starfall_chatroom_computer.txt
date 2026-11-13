@@ -1,11 +1,11 @@
 --@name Chatroom Computer
---@author v32.0
+--@author v32.1
 --@shared
 
-local CHIP_VERSION = "32.0"
+local CHIP_VERSION = "32.1"
 -- Get matching chip versions at https://github.com/Mooseyboi30/MaxwellOS
 local CHANGELOG = {
-    {"v32.0", "Fixed GitHub update detection for chatroom servers."},
+    {"v32.1", "Fixed GitHub update detection for chatroom servers and shortened update checks to one minute."},
     {"v31.9", "Added Paint, a desktop app with a 100x100 pixel canvas."},
     {"v30.9", "Added GitHub update checks to both MaxwellOS chips."},
     {"v30.7", "MaxwellOS remembers your computer name and theme. Room chips save their name and optional password in chip userdata."},
@@ -1014,7 +1014,7 @@ end
 
 if isOwner then
     timer.simple(2, updates.check)
-    timer.create("maxwellos_update_check", 600, 0, updates.check)
+    timer.create("maxwellos_update_check", 60, 0, updates.check)
     hook.add("permissionrequest", "maxwellos_update_check", updates.check)
 end
 
