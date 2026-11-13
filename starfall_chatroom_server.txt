@@ -1,10 +1,10 @@
 --@name Chatroom Server
---@author v29.7
+--@author v30.9
 --@shared
 
 -- Match NETWORK in the computer chip. Set the room name and password on the linked screen.
 local NETWORK = "lobby"
-local CHIP_VERSION = "29.7"
+local CHIP_VERSION = "30.9"
 -- Get matching chip versions at https://github.com/Mooseyboi30/MaxwellOS
 local POSTS_TOP, POSTS_BOTTOM = 160, 480
 local POSTS_TRACK_X = 473
@@ -852,6 +852,20 @@ timer.create("chatroom_board_sync", 0.5, 0, function()
     syncPosts()
 end)
 
+do
+    if getUserdata and json then
+        local ok, saved = pcall(function() return json.decode(getUserdata()) end)
+        if ok and type(saved) == "table" and saved.owner == owner():getSteamID64()
+            and type(saved.name) == "string" and #saved.name <= 28
+            and cleanChatText(saved.name) == saved.name and saved.name ~= ""
+            and not saved.name:find("[^ -~]") and not containsSlurInName(saved.name)
+            and type(saved.password) == "string" and #saved.password <= 64
+            and not saved.password:find("[^ -~]") then
+            roomName, password = saved.name, saved.password
+        end
+    end
+end
+
 net.receive("chatroom_setup", function(_, ply)
     if ply ~= owner() or roomName then return end
     local name, secret = net.readString(), net.readString()
@@ -867,6 +881,10 @@ net.receive("chatroom_setup", function(_, ply)
         return
     end
     roomName, password = name, secret
+    local saved = setUserdata and json and pcall(function()
+        setUserdata(json.encode({owner = ply:getSteamID64(), name = name, password = secret}))
+    end)
+    if not saved then print("MaxwellOS: room settings could not be saved to this chip.") end
     boardReady, boardDirty = true, true
     syncBoard()
 end)
@@ -1204,6 +1222,29 @@ return
 end
 
 local isOwner = player() == owner()
+
+local updates = {latest = nil}
+
+function updates.check()
+    if not isOwner or not http or not http.get then return end
+    if http.canRequest and not http.canRequest() then return end
+    local url = "https://raw.githubusercontent.com/Mooseyboi30/MaxwellOS/main/starfall_chatroom_server.txt"
+    pcall(http.get, url, function(body, _, _, code)
+        if code ~= 200 or type(body) ~= "string" then return end
+        local version = body:sub(1, 180):match('CHIP_VERSION = "(%d%d?%d?%.%d)"')
+        if version then
+            updates.latest = tonumber(version) > tonumber(CHIP_VERSION) and version or nil
+        end
+    end)
+end
+
+if isOwner then
+    if setupPermissionRequest then setupPermissionRequest({"http.get"}, "Check GitHub for MaxwellOS updates", true) end
+    timer.simple(2, updates.check)
+    timer.create("maxwellos_update_check", 600, 0, updates.check)
+    hook.add("permissionrequest", "maxwellos_update_check", updates.check)
+end
+
 local roomName = ""
 local setupName, setupPassword = "", ""
 local editingPassword, shifted = false, false
@@ -1581,7 +1622,7 @@ hook.add("render", "chatroom_board", function()
     render.drawRect(0, 0, 512, 76)
     label(22, 10, roomName == "" and "Server setup" or preview(roomName, 24), ink, titleFont)
     if not isOwner then
-        label(22, 47, "Server v" .. CHIP_VERSION .. "  |  github.com/Mooseyboi30/MaxwellOS", muted, bodyFont)
+        label(22, 47, (updates.latest and ("Update v" .. updates.latest) or ("Server v" .. CHIP_VERSION)) .. "  |  github.com/Mooseyboi30/MaxwellOS", muted, bodyFont)
         label(22, 94, "Only the server owner can view this board.", muted, bodyFont)
         return
     end
@@ -1589,7 +1630,7 @@ hook.add("render", "chatroom_board", function()
         renderSetup()
         return
     end
-    label(22, 47, "Server v" .. CHIP_VERSION .. "  |  github.com/Mooseyboi30/MaxwellOS", muted, bodyFont)
+    label(22, 47, (updates.latest and ("Update v" .. updates.latest) or ("Server v" .. CHIP_VERSION)) .. "  |  github.com/Mooseyboi30/MaxwellOS", muted, bodyFont)
     render.setColor(panel)
     for i = 0, 3 do render.drawRect(16 + i * 120, 83, 116, 35) end
     label(22, 90, "Players (" .. #members .. ")", tab == "connected" and accent or ink, authorFont)

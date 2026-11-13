@@ -1,10 +1,12 @@
 --@name Chatroom Computer
---@author v29.7
+--@author v30.9
 --@shared
 
-local CHIP_VERSION = "29.7"
+local CHIP_VERSION = "30.9"
 -- Get matching chip versions at https://github.com/Mooseyboi30/MaxwellOS
 local CHANGELOG = {
+    {"v30.9", "Added GitHub update checks to both MaxwellOS chips."},
+    {"v30.7", "MaxwellOS remembers your computer name and theme. Room chips save their name and optional password in chip userdata."},
     {"v29.7", "Added two-player Pong and gave Star Squadron enemy types, curved entrances, and diving attacks."},
     {"v28.6", "Added Star Squadron, a solo arcade shooter with enemy formations and waves."},
     {"v27.6", "Website Viewer supports the New Haiku button on the Haiku Generator site."},
@@ -992,6 +994,28 @@ return
 end
 
 local isOwner = player() == owner()
+
+local updates = {latest = nil}
+
+function updates.check()
+    if not isOwner or not http or not http.get then return end
+    if http.canRequest and not http.canRequest() then return end
+    local url = "https://raw.githubusercontent.com/Mooseyboi30/MaxwellOS/main/starfall_chatroom_computer.txt"
+    pcall(http.get, url, function(body, _, _, code)
+        if code ~= 200 or type(body) ~= "string" then return end
+        local version = body:sub(1, 180):match('CHIP_VERSION = "(%d%d?%d?%.%d)"')
+        if version then
+            updates.latest = tonumber(version) > tonumber(CHIP_VERSION) and version or nil
+        end
+    end)
+end
+
+if isOwner then
+    timer.simple(2, updates.check)
+    timer.create("maxwellos_update_check", 600, 0, updates.check)
+    hook.add("permissionrequest", "maxwellos_update_check", updates.check)
+end
+
 local PHONE = {open = false, unread = 0, alertUntil = 0, lockNotice = "", lockNoticeUntil = 0}
 local room = ""
 local roomVersion = ""
@@ -1009,166 +1033,6 @@ local nameDraft = ""
 local showChatHUD = false
 local showPayments = false
 local showPrivate = false
-local emojiOpen = false
-local selectedEmoji = 1
-local emojiFirstRow = 0
-local emojiDraftEnds = {}
-local EMOJI_COLUMNS, EMOJI_ROWS = 8, 6
-local EMOJI_GRID_TOP, EMOJI_GRID_LEFT = 128, 16
-local EMOJI_CATEGORY_TOP, EMOJI_CATEGORY_COLUMNS = 76, 5
-local EMOJI_CATEGORY_WIDTH, EMOJI_CATEGORY_HEIGHT = 96, 24
--- Emoji 18.0 sequences from Unicode emoji-test.txt. Copyright 2026 Unicode, Inc.
--- https://www.unicode.org/terms_of_use.html
-local emojiCategories = {
-    {"Faces", {
-        "😀", "😃", "😄", "😁", "😆", "😅", "🤣", "😂", "🙂", "🙃", "🫠", "😉",
-        "😊", "😇", "🥰", "😍", "🤩", "😘", "😗", "☺️", "😚", "😙", "🥲", "😋",
-        "😛", "😜", "🤪", "😝", "🤑", "🤗", "🤭", "🫢", "🫣", "🤫", "🤔", "🫡",
-        "🤐", "🤨", "😐", "😑", "😶", "🫥", "😶‍🌫️", "😏", "😒", "🙄", "😬", "😮‍💨",
-        "🤥", "🫨", "🙂‍↔️", "🙂‍↕️", "😌", "😔", "😪", "🤤", "😴", "🫩", "😷", "🤒",
-        "🤕", "🤢", "🤮", "🤧", "🥵", "🥶", "🥴", "😵", "😵‍💫", "🤯", "🤠", "🥳",
-        "🥸", "😎", "🤓", "🧐", "😕", "🫤", "😟", "🙁", "☹️", "😮", "😯", "😲",
-        "😳", "🫪", "🥺", "🥹", "😦", "😧", "😨", "😰", "😥", "😢", "😭", "😱",
-        "😖", "😣", "😞", "😓", "😩", "😫", "🥱", "😤", "😡", "😠", "🤬", "😈",
-        "👿", "💀", "☠️", "💩", "🤡", "👹", "👺", "👻", "👽", "👾", "🤖", "😺",
-        "😸", "😹", "😻", "😼", "😽", "🙀", "😿", "😾", "🙈", "🙉", "🙊", "💌",
-        "💘", "💝", "💖", "💗", "💓", "💞", "💕", "💟", "❣️", "💔", "❤️‍🔥", "❤️‍🩹",
-        "❤️", "🩷", "🧡", "💛", "💚", "💙", "🩵", "💜", "🤎", "🖤", "🩶", "🤍",
-        "💋", "💯", "💢", "🫯", "💥", "💫", "💦", "💨", "🕳️", "💬", "👁️‍🗨️", "🗨️",
-        "🗯️", "💭", "💤",
-    }},
-    {"People", {
-        "👋", "🤚", "🖐️", "✋", "🖖", "🫱", "🫲", "🫳", "🫴", "🫷", "🫸", "👌",
-        "🤌", "🤏", "✌️", "🤞", "🫰", "🤟", "🤘", "🤙", "👈", "👉", "👆", "🖕",
-        "👇", "☝️", "🫵", "👍", "👎", "✊", "👊", "🤛", "🤜", "👏", "🙌", "🫶",
-        "👐", "🤲", "🤝", "🙏", "✍️", "💅", "🤳", "💪", "🦾", "🦿", "🦵", "🦶",
-        "👂", "🦻", "👃", "🧠", "🫀", "🫁", "🦷", "🦴", "👀", "👁️", "👅", "👄",
-        "🫦", "👶", "🧒", "👦", "👧", "🧑", "👱", "👨", "🧔", "🧔‍♂️", "🧔‍♀️", "👨‍🦰",
-        "👨‍🦱", "👨‍🦳", "👨‍🦲", "👩", "👩‍🦰", "🧑‍🦰", "👩‍🦱", "🧑‍🦱", "👩‍🦳", "🧑‍🦳", "👩‍🦲", "🧑‍🦲",
-        "👱‍♀️", "👱‍♂️", "🧓", "👴", "👵", "🙍", "🙍‍♂️", "🙍‍♀️", "🙎", "🙎‍♂️", "🙎‍♀️", "🙅",
-        "🙅‍♂️", "🙅‍♀️", "🙆", "🙆‍♂️", "🙆‍♀️", "💁", "💁‍♂️", "💁‍♀️", "🙋", "🙋‍♂️", "🙋‍♀️", "🧏",
-        "🧏‍♂️", "🧏‍♀️", "🙇", "🙇‍♂️", "🙇‍♀️", "🤦", "🤦‍♂️", "🤦‍♀️", "🤷", "🤷‍♂️", "🤷‍♀️", "🥷",
-        "🫅", "🤴", "👸", "👳", "👳‍♂️", "👳‍♀️", "👲", "🧕", "🤵", "🤵‍♂️", "🤵‍♀️", "👰",
-        "👰‍♂️", "👰‍♀️", "🤰", "🫃", "🫄", "🤱", "👩‍🍼", "👨‍🍼", "🧑‍🍼", "👼", "🎅", "🤶",
-        "🧑‍🎄", "🦸", "🦸‍♂️", "🦸‍♀️", "🦹", "🦹‍♂️", "🦹‍♀️", "🧙", "🧙‍♂️", "🧙‍♀️", "🧚", "🧚‍♂️",
-        "🧚‍♀️", "🧛", "🧛‍♂️", "🧛‍♀️", "🧜", "🧜‍♂️", "🧜‍♀️", "🧝", "🧝‍♂️", "🧝‍♀️", "🧞", "🧞‍♂️",
-        "🧞‍♀️", "🧟", "🧟‍♂️", "🧟‍♀️", "🧌", "🫈", "💆", "💆‍♂️", "💆‍♀️", "💇", "💇‍♂️", "💇‍♀️",
-        "🚶", "🚶‍♂️", "🚶‍♀️", "🚶‍➡️", "🚶‍♀️‍➡️", "🚶‍♂️‍➡️", "🧍", "🧍‍♂️", "🧍‍♀️", "🧎", "🧎‍♂️", "🧎‍♀️",
-        "🧎‍➡️", "🧎‍♀️‍➡️", "🧎‍♂️‍➡️", "🧑‍🦯", "🧑‍🦯‍➡️", "👨‍🦯", "👨‍🦯‍➡️", "👩‍🦯", "👩‍🦯‍➡️", "🧑‍🦼", "🧑‍🦼‍➡️", "👨‍🦼",
-        "👨‍🦼‍➡️", "👩‍🦼", "👩‍🦼‍➡️", "🧑‍🦽", "🧑‍🦽‍➡️", "👨‍🦽", "👨‍🦽‍➡️", "👩‍🦽", "👩‍🦽‍➡️", "🏃", "🏃‍♂️", "🏃‍♀️",
-        "🏃‍➡️", "🏃‍♀️‍➡️", "🏃‍♂️‍➡️", "💃", "🕺", "🕴️", "👯", "👯‍♂️", "👯‍♀️", "🧖", "🧖‍♂️", "🧖‍♀️",
-        "🧗", "🧗‍♂️", "🧗‍♀️", "🤺", "🏇", "⛷️", "🏂", "🏌️", "🏌️‍♂️", "🏌️‍♀️", "🏄", "🏄‍♂️",
-        "🏄‍♀️", "🚣", "🚣‍♂️", "🚣‍♀️", "🏊", "🏊‍♂️", "🏊‍♀️", "⛹️", "⛹️‍♂️", "⛹️‍♀️", "🏋️", "🏋️‍♂️",
-        "🏋️‍♀️", "🚴", "🚴‍♂️", "🚴‍♀️", "🚵", "🚵‍♂️", "🚵‍♀️", "🤸", "🤸‍♂️", "🤸‍♀️", "🤼", "🤼‍♂️",
-        "🤼‍♀️", "🤽", "🤽‍♂️", "🤽‍♀️", "🤾", "🤾‍♂️", "🤾‍♀️", "🤹", "🤹‍♂️", "🤹‍♀️", "🧘", "🧘‍♂️",
-        "🧘‍♀️", "🛀", "🛌", "🗣️", "👤", "👥", "🫂", "👣", "🫆", "🦰", "🦱", "🦳",
-        "🦲",
-    }},
-    {"Nature", {
-        "🐵", "🐒", "🦍", "🦧", "🐶", "🐕", "🦮", "🐕‍🦺", "🐩", "🐺", "🦊", "🦝",
-        "🐱", "🐈", "🐈‍⬛", "🦁", "🐯", "🐅", "🐆", "🐴", "🫎", "🫏", "🐎", "🦄",
-        "🦓", "🦌", "🦬", "🐮", "🐂", "🐃", "🐄", "🐷", "🐖", "🐗", "🐽", "🐏",
-        "🐑", "🐐", "🐪", "🐫", "🦙", "🦒", "🐘", "🦣", "🦏", "🦛", "🐭", "🐁",
-        "🐀", "🐹", "🐰", "🐇", "🐿️", "🦫", "🦔", "🦇", "🐻", "🐻‍❄️", "🐨", "🐼",
-        "🦥", "🦦", "🦨", "🦘", "🦡", "🐾", "🦃", "🐔", "🐓", "🐣", "🐤", "🐥",
-        "🐦", "🐧", "🕊️", "🦅", "🦆", "🦢", "🦉", "🦤", "🪶", "🦩", "🦚", "🦜",
-        "🪽", "🐦‍⬛", "🪿", "🐦‍🔥", "🐸", "🐊", "🐢", "🦎", "🐍", "🐲", "🐉", "🦕",
-        "🦖", "🐳", "🐋", "🐬", "🫍", "🦭", "🐟", "🐠", "🐡", "🦈", "🐙", "🐚",
-        "🪸", "🪼", "🦀", "🦞", "🦐", "🦑", "🦪", "🐌", "🦋", "🫌", "🐛", "🐜",
-        "🐝", "🪲", "🐞", "🦗", "🪳", "🕷️", "🕸️", "🦂", "🦟", "🪰", "🪱", "🦠",
-        "💐", "🌸", "💮", "🪷", "🏵️", "🌹", "🥀", "🌺", "🌻", "🌼", "🌷", "🪻",
-        "🌱", "🪴", "🌲", "🌳", "🌴", "🌵", "🌾", "🌿", "☘️", "🍀", "🍁", "🍂",
-        "🍃", "🪹", "🪺", "🍄", "🪾",
-    }},
-    {"Food", {
-        "🍇", "🍈", "🍉", "🍊", "🍋", "🍋‍🟩", "🍌", "🍍", "🥭", "🍎", "🍏", "🍐",
-        "🍑", "🍒", "🍓", "🫐", "🥝", "🍅", "🫒", "🥥", "🥑", "🍆", "🥔", "🥕",
-        "🌽", "🌶️", "🫑", "🥒", "🫝", "🥬", "🥦", "🧄", "🧅", "🥜", "🫘", "🌰",
-        "🫚", "🫛", "🍄‍🟫", "🫜", "🍞", "🥐", "🥖", "🫓", "🥨", "🥯", "🥞", "🧇",
-        "🧀", "🍖", "🍗", "🥩", "🥓", "🍔", "🍟", "🍕", "🌭", "🥪", "🌮", "🌯",
-        "🫔", "🥙", "🧆", "🥚", "🍳", "🥘", "🍲", "🫕", "🥣", "🥗", "🍿", "🧈",
-        "🧂", "🥫", "🍱", "🍘", "🍙", "🍚", "🍛", "🍜", "🍝", "🍠", "🍢", "🍣",
-        "🍤", "🍥", "🥮", "🍡", "🥟", "🥠", "🥡", "🍦", "🍧", "🍨", "🍩", "🍪",
-        "🎂", "🍰", "🧁", "🥧", "🍫", "🍬", "🍭", "🍮", "🍯", "🍼", "🥛", "☕",
-        "🫖", "🍵", "🍶", "🍾", "🍷", "🍸", "🍹", "🍺", "🍻", "🥂", "🥃", "🫗",
-        "🥤", "🧋", "🧃", "🧉", "🧊", "🥢", "🍽️", "🍴", "🥄", "🔪", "🫙", "🏺",
-    }},
-    {"Travel", {
-        "🌍", "🌎", "🌏", "🌐", "🗺️", "🗾", "🧭", "🏔️", "⛰️", "🛘", "🌋", "🗻",
-        "🏕️", "🏖️", "🏜️", "🏝️", "🏞️", "🏟️", "🏛️", "🏗️", "🧱", "🪨", "🪵", "🛖",
-        "🏘️", "🏚️", "🏠", "🏡", "🏢", "🏣", "🏤", "🏥", "🏦", "🏨", "🏩", "🏪",
-        "🏫", "🏬", "🏭", "🏯", "🏰", "💒", "🗼", "🗽", "⛪", "🕌", "🛕", "🕍",
-        "⛩️", "🕋", "⛲", "⛺", "🌁", "🌃", "🏙️", "🌄", "🌅", "🌆", "🌇", "🌉",
-        "♨️", "🎠", "🛝", "🎡", "🎢", "💈", "🎪", "🚂", "🚃", "🚄", "🚅", "🚆",
-        "🚇", "🚈", "🚉", "🚊", "🚝", "🚞", "🚋", "🚌", "🚍", "🚎", "🚐", "🚑",
-        "🚒", "🚓", "🚔", "🚕", "🚖", "🚗", "🚘", "🚙", "🛻", "🚚", "🚛", "🚜",
-        "🏎️", "🏍️", "🛵", "🦽", "🦼", "🛺", "🚲", "🛴", "🛹", "🛼", "🚏", "🛣️",
-        "🛤️", "🛢️", "⛽", "🛞", "🚨", "🚥", "🚦", "🛑", "🚧", "🛙", "⚓", "🛟",
-        "⛵", "🛶", "🚤", "🛳️", "⛴️", "🛥️", "🚢", "✈️", "🛩️", "🛫", "🛬", "🪂",
-        "💺", "🚁", "🚟", "🚠", "🚡", "🛰️", "🚀", "🛸", "🛎️", "🧳", "⌛", "⏳",
-    }},
-    {"Activities", {
-        "🎃", "🎄", "🎆", "🎇", "🧨", "✨", "🎈", "🎉", "🎊", "🎋", "🎍", "🎎",
-        "🎏", "🎐", "🎑", "🧧", "🎀", "🎁", "🎗️", "🎟️", "🎫", "🎖️", "🏆", "🏅",
-        "🥇", "🥈", "🥉", "⚽", "⚾", "🥎", "🏀", "🏐", "🏈", "🏉", "🎾", "🥏",
-        "🎳", "🏏", "🏑", "🏒", "🥍", "🏓", "🏸", "🥊", "🥋", "🥅", "⛳", "⛸️",
-        "🎣", "🤿", "🎽", "🎿", "🛷", "🥌", "🎯", "🪀", "🪁", "🔫", "🎱", "🔮",
-        "🪄", "🎮", "🕹️", "🎰", "🎲", "🧩", "🧸", "🪅", "🪩", "🪆", "♠️", "♥️",
-        "♦️", "♣️", "♟️", "🃏", "🀄", "🎴", "🎭", "🖼️", "🎨", "🧵", "🪡", "🧶",
-        "🪢",
-    }},
-    {"Objects", {
-        "👓", "🕶️", "🥽", "🥼", "🦺", "👔", "👕", "👖", "🧣", "🧤", "🧥", "🧦",
-        "👗", "👘", "🥻", "🩱", "🩲", "🩳", "👙", "👚", "🪭", "👛", "👜", "👝",
-        "🛍️", "🎒", "🩴", "👞", "👟", "🥾", "🥿", "👠", "👡", "🩰", "👢", "🪮",
-        "👑", "👒", "🎩", "🎓", "🧢", "🪖", "⛑️", "📿", "💄", "💍", "💎", "🔇",
-        "🔈", "🔉", "🔊", "📢", "📣", "📯", "🔔", "🔕", "🎼", "🎵", "🎶", "🎙️",
-        "🎚️", "🎛️", "🎤", "🎧", "📻", "🎷", "🎺", "🪊", "🪗", "🎸", "🎹", "🎻",
-        "🪕", "🥁", "🪘", "🪇", "🪈", "🪉", "📱", "📲", "☎️", "📞", "📟", "📠",
-        "🔋", "🪫", "🔌", "💻", "🖥️", "🖨️", "⌨️", "🖱️", "🖲️", "💽", "💾", "💿",
-        "📀", "🧮", "🎥", "🎞️", "📽️", "🎬", "📺", "📷", "📸", "📹", "📼", "🔍",
-        "🔎", "🕯️", "💡", "🔦", "🏮", "🪔", "📔", "📕", "📖", "📗", "📘", "📙",
-        "📚", "📓", "📒", "📃", "📜", "📄", "📰", "🗞️", "📑", "🔖", "🏷️", "🪙",
-        "💰", "🪎", "💴", "💵", "💶", "💷", "💸", "💳", "🧾", "💹", "✉️", "📧",
-        "📨", "📩", "📤", "📥", "📦", "📫", "📪", "📬", "📭", "📮", "🗳️", "✏️",
-        "✒️", "🖋️", "🖊️", "🖌️", "🖍️", "📝", "🪌", "💼", "📁", "📂", "🗂️", "📅",
-        "📆", "🗒️", "🗓️", "📇", "📈", "📉", "📊", "📋", "📌", "📍", "📎", "🖇️",
-        "📏", "📐", "✂️", "🗃️", "🗄️", "🗑️", "🔒", "🔓", "🔏", "🔐", "🔑", "🗝️",
-        "🪍", "🔨", "🪓", "⛏️", "⚒️", "🛠️", "🗡️", "⚔️", "💣", "🪃", "🏹", "🛡️",
-        "🪚", "🔧", "🪛", "🔩", "⚙️", "🗜️", "⚖️", "🦯", "🔗", "⛓️‍💥", "⛓️", "🪝",
-        "🧰", "🧲", "🪜", "🪏", "⚗️", "🧪", "🧫", "🧬", "🔬", "🔭", "📡", "💉",
-        "🩸", "💊", "🩹", "🩼", "🩺", "🩻", "🚪", "🛗", "🪞", "🪟", "🛏️", "🛋️",
-        "🪑", "🚽", "🪠", "🚿", "🛁", "🪤", "🪒", "🧴", "🧷", "🧹", "🧺", "🧻",
-        "🪣", "🧼", "🫧", "🪥", "🧽", "🧯", "🛒", "🚬", "⚰️", "🪦", "⚱️", "🧿",
-        "🪬", "🗿", "🪧", "🪪",
-    }},
-    {"Symbols", {
-        "🏧", "🚮", "🚰", "♿", "🚹", "🚺", "🚻", "🚼", "🚾", "🛂", "🛃", "🛄",
-        "🛅", "⚠️", "🚸", "⛔", "🚫", "🚳", "🚭", "🚯", "🚱", "🚷", "📵", "🔞",
-        "☢️", "☣️", "⬆️", "↗️", "➡️", "↘️", "⬇️", "↙️", "⬅️", "↖️", "↕️", "↔️",
-        "↩️", "↪️", "⤴️", "⤵️", "🔃", "🔄", "🔙", "🔚", "🔛", "🔜", "🔝", "🛐",
-        "⚛️", "🕉️", "✡️", "☸️", "☯️", "✝️", "☦️", "☪️", "☮️", "🕎", "🔯", "🪯",
-        "♈", "♉", "♊", "♋", "♌", "♍", "♎", "♏", "♐", "♑", "♒", "♓",
-        "⛎", "🔀", "🔁", "🔂", "▶️", "⏩", "⏭️", "⏯️", "◀️", "⏪", "⏮️", "🔼",
-        "⏫", "🔽", "⏬", "⏸️", "⏹️", "⏺️", "⏏️", "🎦", "🔅", "🔆", "📶", "🛜",
-        "📳", "📴", "♀️", "♂️", "⚧️", "✖️", "➕", "➖", "➗", "🟰", "♾️", "‼️",
-        "⁉️", "❓", "❔", "❕", "❗", "〰️", "💱", "💲", "⚕️", "♻️", "⚜️", "🔱",
-        "📛", "🔰", "⭕", "✅", "☑️", "✔️", "❌", "❎", "➰", "➿", "〽️", "✳️",
-        "✴️", "❇️", "©️", "®️", "™️", "🫟", "#️⃣", "*️⃣", "0️⃣", "1️⃣", "2️⃣", "3️⃣",
-        "4️⃣", "5️⃣", "6️⃣", "7️⃣", "8️⃣", "9️⃣", "🔟", "🔠", "🔡", "🔢", "🔣", "🔤",
-        "🅰️", "🆎", "🅱️", "🆑", "🆒", "🆓", "ℹ️", "🆔", "Ⓜ️", "🆕", "🆖", "🅾️",
-        "🆗", "🅿️", "🆘", "🆙", "🆚", "🈁", "🈂️", "🈷️", "🈶", "🈯", "🉐", "🈹",
-        "🈚", "🈲", "🉑", "🈸", "🈴", "🈳", "㊗️", "㊙️", "🈺", "🈵", "🔴", "🟠",
-        "🟡", "🟢", "🔵", "🟣", "🟤", "⚫", "⚪", "🟥", "🟧", "🟨", "🟩", "🟦",
-        "🟪", "🟫", "⬛", "⬜", "◼️", "◻️", "◾", "◽", "▪️", "▫️", "🔶", "🔷",
-        "🔸", "🔹", "🔺", "🔻", "💠", "🔘", "🔳", "🔲",
-    }},
-    {"Flags", {
-        "🏁", "🚩", "🎌", "🏴", "🏳️", "🏳️‍🌈", "🏳️‍⚧️", "🏴‍☠️",
-    }},
-}
-local emojiCategory = 1
-local EMOJIS = emojiCategories[emojiCategory][2]
 local privateRecipients, privateRows = {}, {}
 local privateSelection, privateScroll = 0, 0
 local privateDraft, privateStatus = "", ""
@@ -1376,11 +1240,30 @@ local THEME_TOP = 100
 local THEME_STEP = 34
 local THEME_HEIGHT = 30
 
+function settings.saveProfile()
+    if not isOwner or not file or not file.write then return end
+    local ok = pcall(file.write, "maxwellos_profile.txt", settings.theme .. "\n" .. computerName)
+    settings.storageError = not ok
+end
+
 local function applyTheme()
     local theme = themes[settings.theme]
     background, panel, accent = theme.background, theme.panel, theme.accent
     ink, muted, alertColor = theme.ink or themes.defaultInk, theme.muted or themes.defaultMuted, theme.alert or themes.defaultAlert
     themeConfigured = true
+    settings.saveProfile()
+end
+
+if isOwner and file and file.read then
+    local ok, data = pcall(file.read, "maxwellos_profile.txt")
+    if ok and type(data) == "string" and #data <= 28 then
+        local theme, name = data:match("^(%d)\n([A-Za-z0-9_-]*)$")
+        theme = tonumber(theme)
+        if theme and themes[theme] and #name <= 24 then
+            settings.theme, computerName = theme, name
+            applyTheme()
+        end
+    end
 end
 function themes.selectAt(y)
     if y >= THEME_TOP and y < THEME_TOP + #themes * THEME_STEP then
@@ -1408,6 +1291,7 @@ function settings.saveName()
         settings.message = "Name saved."
     elseif room == "" then
         computerName, settings.message = name, "Name saved."
+        settings.saveProfile()
     elseif net.getBytesLeft() < 64 then
         settings.message = "Connection busy. Try again shortly."
     else
@@ -1672,72 +1556,6 @@ function PHONE.reportTyping(active)
     net.send()
 end
 
-local function insertEmoji()
-    local symbol = EMOJIS[selectedEmoji]
-    if #draft + #symbol <= 160 then
-        draft = draft .. symbol
-        PHONE.reportTyping(true)
-        emojiDraftEnds[#draft] = symbol
-        emojiOpen, status = false, ""
-    else
-        status = "The draft is full."
-    end
-end
-
-local function eraseDraftCharacter()
-    local last = #draft
-    local emoji = emojiDraftEnds[last]
-    if emoji and draft:sub(-#emoji) == emoji then
-        emojiDraftEnds[last] = nil
-        draft = draft:sub(1, last - #emoji)
-        return
-    end
-    while last > 1 and draft:byte(last) >= 128 and draft:byte(last) <= 191 do last = last - 1 end
-    draft = draft:sub(1, last - 1)
-end
-
-local function selectEmoji(index)
-    selectedEmoji = math.max(1, math.min(#EMOJIS, index))
-    local row = math.floor((selectedEmoji - 1) / EMOJI_COLUMNS)
-    if row < emojiFirstRow then emojiFirstRow = row
-    elseif row >= emojiFirstRow + EMOJI_ROWS then emojiFirstRow = row - EMOJI_ROWS + 1 end
-end
-
-local function selectEmojiCategory(index)
-    if not emojiCategories[index] then return end
-    emojiCategory = index
-    EMOJIS = emojiCategories[index][2]
-    selectedEmoji, emojiFirstRow = 1, 0
-end
-
-local function handleEmojiKey(key, enter)
-    if key == 166 then
-        emojiOpen = not emojiOpen
-        return true
-    end
-    if not emojiOpen then return false end
-    if key == 17 then selectEmoji(selectedEmoji - EMOJI_COLUMNS)
-    elseif key == 18 then selectEmoji(selectedEmoji + EMOJI_COLUMNS)
-    elseif key == 19 then selectEmoji(selectedEmoji - 1)
-    elseif key == 20 then selectEmoji(selectedEmoji + 1)
-    elseif key == 151 then selectEmoji(selectedEmoji - EMOJI_COLUMNS * EMOJI_ROWS)
-    elseif key == 152 then selectEmoji(selectedEmoji + EMOJI_COLUMNS * EMOJI_ROWS)
-    elseif key >= 49 and key <= 57 then selectEmojiCategory(key - 48)
-    elseif enter then insertEmoji() end
-    return true
-end
-
-function PHONE.geometry()
-    local sw, sh = render.getResolution()
-    -- Reserve a separate button row for the control lock.
-    local scale = math.min(0.90, math.max(0.38, (sh - 150) / 512))
-    local face = 512 * scale
-    local fw, fh = face + 28, face + 128
-    local x = math.max(12, sw - fw - 24)
-    local y = math.max(12, (sh - fh) * 0.5)
-    return x, y, scale, face, fw, fh
-end
-
 local function versionStatus(version)
     local serverVersion = tonumber(version)
     if not serverVersion then return "Server version unknown", false end
@@ -1912,7 +1730,7 @@ local function toggleLastApp()
         return
     end
     joining, versionWarning, password = nil, nil, ""
-    showPrivate, showChannels, emojiOpen = false, false, false
+    showPrivate, showChannels = false, false
     changeGameTab("menu")
 end
 
@@ -2421,7 +2239,7 @@ if isOwner then
     function PHONE.computerClickAt(x, y)
         if not poweredOn or timer.curtime() < startupUntil or not x or not y or x < 16 or x >= 496 then return end
         if themeConfigured then
-            if room ~= "" and not gameTab and not showPayments and not showPrivate and not emojiOpen
+            if room ~= "" and not gameTab and not showPayments and not showPrivate
                 and x >= 265 and x < 365 and y >= 8 and y < 39 then
                 toggleChannels()
                 return
@@ -2484,28 +2302,6 @@ if isOwner then
                     end
                     return
                 elseif gameTab then return end
-            end
-            if room ~= "" and not showPayments and not showPrivate and not showChannels then
-                if emojiOpen and x >= EMOJI_GRID_LEFT and x < EMOJI_GRID_LEFT + EMOJI_COLUMNS * 60 then
-                    local offsetX = x - EMOJI_GRID_LEFT
-                    if y >= EMOJI_CATEGORY_TOP and y < EMOJI_CATEGORY_TOP + 2 * EMOJI_CATEGORY_HEIGHT then
-                        local row = math.floor((y - EMOJI_CATEGORY_TOP) / EMOJI_CATEGORY_HEIGHT)
-                        selectEmojiCategory(row * EMOJI_CATEGORY_COLUMNS + math.floor(offsetX / EMOJI_CATEGORY_WIDTH) + 1)
-                        return
-                    elseif y >= EMOJI_GRID_TOP and y < EMOJI_GRID_TOP + EMOJI_ROWS * 46 then
-                        local row = emojiFirstRow + math.floor((y - EMOJI_GRID_TOP) / 46)
-                        local index = row * EMOJI_COLUMNS + math.floor(offsetX / 60) + 1
-                        if EMOJIS[index] and offsetX % 60 < 55 and (y - EMOJI_GRID_TOP) % 46 < 41 then
-                            selectEmoji(index)
-                            insertEmoji()
-                        end
-                        return
-                    end
-                end
-                if not gameTab and x >= 370 and y >= 419 and y < 457 then
-                    emojiOpen = not emojiOpen
-                    return
-                elseif emojiOpen then return end
             end
             return
         end
@@ -2590,6 +2386,7 @@ if isOwner then
         settings.waiting = nil
         if result == "ok" then
             computerName, settings.name, settings.message = name, name, "Name saved."
+            settings.saveProfile()
         else
             settings.message = result
         end
@@ -2619,7 +2416,6 @@ if isOwner then
             showPrivate, privateWaiting, privateDraft, privateStatus = false, nil, "", ""
             showChannels, channelWaiting, channelNames, selectedChannel = false, nil, {}, 1
             channelIds = {}
-            emojiOpen = false
             privateRecipients, privateRows, privateSelection, privateScroll = {}, {}, 0, 0
             paymentRecipients, paymentSelection, paymentAmount, paymentStatus = {}, 1, "", ""
             if MULTIPLAYER_TABS[gameTab] or gameTab == "payments" then gameTab = nil end
@@ -2895,6 +2691,7 @@ if isOwner then
             if enter then
                 if nameDraft ~= "" then
                     computerName, status = nameDraft, ""
+                    settings.saveProfile()
                 else
                     status = "Enter a computer name first."
                 end
@@ -2957,12 +2754,9 @@ if isOwner then
             return
         end
         if key == 164 and not gameTab and not showPayments and not showPrivate then
-            emojiOpen = false
             toggleChannels()
             return
         end
-        if not gameTab and not showPayments and not showPrivate and not showChannels
-            and handleEmojiKey(key, enter) then return end
         if showChannels then
             if channelWaiting then return end
             if key == 17 then selectedChannel = math.max(1, selectedChannel - 1)
@@ -3000,7 +2794,7 @@ if isOwner then
             end
         elseif key == 127 or key == 8 then
             local previous = draft
-            eraseDraftCharacter()
+            draft = draft:sub(1, -2)
             if previous ~= draft then PHONE.reportTyping(draft ~= "") end
         else
             if character and #draft < 160 then
@@ -3030,7 +2824,7 @@ if isOwner then
             end
         end
     end)
-    setupPermissionRequest({"enablehud", "render.hud", "input", "input.enablecursor", "input.lockcontrols"},
+    setupPermissionRequest({"enablehud", "render.hud", "input", "input.enablecursor", "input.lockcontrols", "http.get"},
         "Optional pocket computer with mouse and keyboard controls", true)
 
     function PHONE.activateHud()
@@ -3098,7 +2892,7 @@ if isOwner then
         [KEY.BACKSPACE] = 8, [KEY.SPACE] = 32,
         [KEY.UP] = 17, [KEY.DOWN] = 18, [KEY.LEFT] = 19, [KEY.RIGHT] = 20,
         [KEY.PAGEUP] = 151, [KEY.PAGEDOWN] = 152,
-        [KEY.F1] = 163, [KEY.F2] = 164, [KEY.F4] = 166,
+        [KEY.F1] = 163, [KEY.F2] = 164,
         [KEY.F5] = 167, [KEY.F6] = 168,
         [KEY.SLASH] = 47, [KEY.PERIOD] = 46, [KEY.COMMA] = 44,
         [KEY.MINUS] = 45, [KEY.EQUAL] = 61,
@@ -3730,6 +3524,9 @@ local function renderWebsite()
 end
 
 local function renderChangelog()
+    if updates.latest then
+        label(22, 61, "Update: github.com/Mooseyboi30/MaxwellOS", accent, smallFont)
+    end
     local entry = CHANGELOG[changelogPage]
     if renderedChangelogPage ~= changelogPage then
         changelogRows = wrapText(entry[2], 440, font)
@@ -3773,7 +3570,7 @@ local function renderAppsPanel()
             render.drawRect(16, 226, 160, 42)
             label(28, 174, settings.name .. "_", accent)
             label(28, 236, "Save name", accent)
-            label(22, 285, settings.message, muted, smallFont)
+            label(22, 285, settings.storageError and "Local profile could not be saved." or settings.message, muted, smallFont)
             label(22, 483, "Left/Right tabs  |  Type a name  |  Enter saves", muted, smallFont)
         end
     elseif gameTab == "hud" then
@@ -3789,40 +3586,6 @@ local function renderAppsPanel()
     elseif gameTab == "squadron" then PHONE.squadron.draw()
     elseif gameTab == "mines" then renderMines()
     else renderMatchTab() end
-end
-
-local function renderEmojiPicker()
-    render.setColor(background)
-    render.drawRect(370, 419, 122, 38)
-    label(379, 429, emojiOpen and "Close emoji" or "Emoji  F4", accent, smallFont)
-    if emojiOpen then
-        for index, category in ipairs(emojiCategories) do
-            local slot = index - 1
-            local x = EMOJI_GRID_LEFT + slot % EMOJI_CATEGORY_COLUMNS * EMOJI_CATEGORY_WIDTH
-            local y = EMOJI_CATEGORY_TOP + math.floor(slot / EMOJI_CATEGORY_COLUMNS) * EMOJI_CATEGORY_HEIGHT
-            render.setColor(panel)
-            render.drawRect(x, y, EMOJI_CATEGORY_WIDTH - 4, EMOJI_CATEGORY_HEIGHT - 3)
-            label(x + 5, y + 2, index .. " " .. category[1], index == emojiCategory and accent or ink, smallFont)
-        end
-        local first = emojiFirstRow * EMOJI_COLUMNS + 1
-        local last = math.min(#EMOJIS, first + EMOJI_COLUMNS * EMOJI_ROWS - 1)
-        for i = first, last do
-            local slot = i - first
-            local x = EMOJI_GRID_LEFT + slot % EMOJI_COLUMNS * 60
-            local y = EMOJI_GRID_TOP + math.floor(slot / EMOJI_COLUMNS) * 46
-            render.setColor(panel)
-            render.drawRect(x, y, 55, 41)
-            if i == selectedEmoji then
-                render.setColor(accent)
-                render.drawRect(x, y + 38, 55, 3)
-            end
-            label(x + 14, y + 10, EMOJIS[i], i == selectedEmoji and accent or ink, emojiFont)
-        end
-        label(22, 418, selectedEmoji .. " / " .. #EMOJIS, muted, smallFont)
-        label(22, 483, status ~= "" and status or "1-9 category  |  Arrows select  |  PgUp/PgDn  |  Enter inserts", muted, smallFont)
-        return true
-    end
-    return false
 end
 
 function PHONE.drawComputerScreen()
@@ -3893,7 +3656,8 @@ function PHONE.drawComputerScreen()
         label(22, 46, "This terminal belongs to another player.", muted, smallFont)
         return
     end
-    label(376, 46, "Computer v" .. CHIP_VERSION, muted, smallFont)
+    label(376, 46, updates.latest and ("Update v" .. updates.latest) or ("Computer v" .. CHIP_VERSION),
+        updates.latest and alertColor or muted, smallFont)
     if room ~= "" then
         if not gameTab and not showPayments and not showPrivate then
             render.setColor(background)
@@ -3971,7 +3735,6 @@ function PHONE.drawComputerScreen()
         label(22, 46, "# " .. channelName .. "  |  " .. versionStatus(roomVersion), accent, smallFont)
     end
 
-    if renderEmojiPicker() then return end
     if #rows == 0 then label(22, 91, "No messages yet.", muted) end
     local last = #rows - scroll
     local first = math.max(1, last - ROWS_VISIBLE + 1)
@@ -3997,7 +3760,7 @@ function PHONE.drawComputerScreen()
     for i = firstPrompt, #promptRows do
         label(26, 378 + (i - firstPrompt) * 18, promptRows[i], focused and accent or muted, emojiFont)
     end
-    local hint = focused and "F1 Desktop  |  F2 Channels  |  F4 Emoji  |  F5 PM  |  F6 Leave"
+    local hint = focused and "F1 Desktop  |  F2 Channels  |  F5 PM  |  F6 Leave"
         or "Look at the Wiremod Keyboard and press E"
     label(22, 483, status ~= "" and status or hint, muted, smallFont)
 end
