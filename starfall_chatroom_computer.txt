@@ -1,10 +1,11 @@
 --@name Chatroom Computer
---@author v32.2
+--@author v32.4
 --@shared
 
-local CHIP_VERSION = "32.2"
+local CHIP_VERSION = "32.4"
 -- Get matching chip versions at https://github.com/Mooseyboi30/MaxwellOS
 local CHANGELOG = {
+    {"v32.4", "Paint uses a 50x50 canvas, has five local save slots, and shares drawings in chat channels."},
     {"v32.2", "Update notices direct players to GitHub for the latest chips."},
     {"v32.1", "Fixed GitHub update detection for chatroom servers and shortened update checks to one minute."},
     {"v31.9", "Added Paint, a desktop app with a 100x100 pixel canvas."},
@@ -740,6 +741,24 @@ net.receive("room_typing", function(_, ply)
     request(server, "typing", active)
 end)
 
+do
+    local nextPainting = 0
+    net.receive("room_painting", function(_, ply)
+        if ply ~= owner() or not ready or not server or timer.curtime() < nextPainting then return end
+        nextPainting = timer.curtime() + 1
+        local sending = net.readBool()
+        if net.getBytesLeft() < (sending and 128 or 2600) then return end
+        local reply = request(server, sending and "painting_post" or "painting_latest", sending and net.readString() or nil)
+        local message = reply and type(reply[1]) == "string" and reply[1] or "Painting sharing requires an updated room."
+        local pixels = reply and reply[2]
+        net.start("room_painting_result")
+        net.writeString(message:sub(1, 100))
+        net.writeString(type(pixels) == "string" and #pixels == 2500 and pixels or "")
+        net.writeString(channelName)
+        net.send(ply)
+    end)
+end
+
 net.receive("room_post", function(_, ply)
     if ply ~= owner() or not ready then return end
     local now = timer.curtime()
@@ -1117,7 +1136,7 @@ local APPS = {
     {tab = "payments", name = "Payments", detail = "Send in-game money", needsRoom = true},
     {tab = "changelog", name = "Changelog", detail = "Browse release history"},
     {tab = "settings", name = "Settings", detail = "Colors and computer name"},
-    {tab = "paint", name = "Paint", detail = "100 x 100 pixel canvas"}
+    {tab = "paint", name = "Paint", detail = "50 x 50 pixel canvas"}
 }
 local menuOptions = APPS
 local LAUNCHER_TOP, TILE_WIDTH, TILE_HEIGHT, TILE_GAP = 132, 232, 68, 16
@@ -1484,7 +1503,7 @@ function PHONE.squadron.draw()
 end
 
 PHONE.paint = {
-    x = 50, y = 50, color = 1, rows = {}, runs = {},
+    x = 25, y = 25, color = 1, slot = 1, rows = {}, runs = {},
     palette = {Color(20, 20, 28), Color(220, 55, 68), Color(245, 145, 45),
         Color(249, 212, 65), Color(49, 164, 102), Color(55, 113, 220),
         Color(153, 79, 213), Color(255, 255, 255)}
@@ -1497,7 +1516,7 @@ function PHONE.paint.pixel(x, y)
     row[x] = paint.palette[paint.color] and paint.color or nil
     local runs = {}
     local previous
-    for column = 1, 100 do
+    for column = 1, 50 do
         local color = row[column]
         if color and color ~= previous then
             runs[#runs + 1] = {column, 1, color}
@@ -1509,25 +1528,89 @@ function PHONE.paint.pixel(x, y)
     paint.runs[y] = runs
 end
 
+function PHONE.paint.encode()
+    local cells = {}
+    for y = 1, 50 do
+        local row = PHONE.paint.rows[y] or {}
+        for x = 1, 50 do cells[#cells + 1] = tostring(row[x] or 0) end
+    end
+    return table.concat(cells)
+end
+
+function PHONE.paint.decode(data)
+    if type(data) ~= "string" or #data ~= 2500 then return false end
+    local rows, runs = {}, {}
+    for y = 1, 50 do
+        local row, spans, previous = {}, {}, 0
+        for x = 1, 50 do
+            local color = data:byte((y - 1) * 50 + x) - 48
+            if color < 0 or color > 8 then return false end
+            if color > 0 then
+                row[x] = color
+                if color == previous then spans[#spans][2] = spans[#spans][2] + 1
+                else spans[#spans + 1] = {x, 1, color} end
+            end
+            previous = color
+        end
+        rows[y], runs[y] = row, spans
+    end
+    return rows, runs
+end
+
+function PHONE.paint.action(action)
+    local paint = PHONE.paint
+    local path = paint.slot == 1 and "maxwellos_painting.txt" or ("maxwellos_painting_" .. paint.slot .. ".txt")
+    if action == "slot" then
+        paint.slot = paint.slot % 5 + 1
+        paint.message = "Selected save slot " .. paint.slot .. "."
+        return
+    end
+    if action == "save" then
+        local ok = file and file.write and pcall(file.write, path, paint.encode())
+        paint.message = ok and "Saved to slot " .. paint.slot .. "." or "Could not save painting."
+    elseif action == "load" then
+        local ok, data
+        if file and file.read then ok, data = pcall(file.read, path) end
+        local rows, runs = paint.decode(ok and data)
+        if rows then paint.rows, paint.runs = rows, runs end
+        paint.message = rows and "Loaded slot " .. paint.slot .. "." or ("No readable painting in slot " .. paint.slot .. ".")
+    elseif room == "" then
+        paint.message = "Join a chatroom first."
+    elseif net.getBytesLeft() < (action == "send" and 2560 or 32) then
+        paint.message = "Connection busy. Try again."
+    else
+        net.start("room_painting")
+        net.writeBool(action == "send")
+        if action == "send" then net.writeString(paint.encode()) end
+        net.send()
+    end
+end
+
 function PHONE.paint.click(x, y)
     local paint = PHONE.paint
     if x >= 56 and x < 456 and y >= 78 and y < 478 then
-        paint.x, paint.y = math.floor((x - 56) / 4) + 1, math.floor((y - 78) / 4) + 1
+        paint.x, paint.y = math.floor((x - 56) / 8) + 1, math.floor((y - 78) / 8) + 1
         paint.pixel(paint.x, paint.y)
     elseif x >= 466 and x < 496 and y >= 84 and y < 84 + 9 * 32 then
         paint.color = math.floor((y - 84) / 32) + 1
+    elseif x >= 466 and x < 496 and y >= 365 and y < 477 then
+        paint.action(({"slot", "save", "load", "send"})[math.floor((y - 365) / 28) + 1])
     end
 end
 
 function PHONE.paint.key(key, enter)
     local paint = PHONE.paint
-    if key >= 49 and key <= 57 then paint.color = key - 48
+    if key == 86 or key == 118 then paint.action("slot")
+    elseif key == 83 or key == 115 then paint.action("save")
+    elseif key == 76 or key == 108 then paint.action("load")
+    elseif key == 84 or key == 116 then paint.action("send")
+    elseif key >= 49 and key <= 57 then paint.color = key - 48
     elseif enter or key == 32 then paint.pixel(paint.x, paint.y)
     elseif key == 17 or key == 18 or key == 19 or key == 20 then
         if key == 17 then paint.y = math.max(1, paint.y - 1)
-        elseif key == 18 then paint.y = math.min(100, paint.y + 1)
+        elseif key == 18 then paint.y = math.min(50, paint.y + 1)
         elseif key == 19 then paint.x = math.max(1, paint.x - 1)
-        else paint.x = math.min(100, paint.x + 1) end
+        else paint.x = math.min(50, paint.x + 1) end
         if paint.pen then paint.pixel(paint.x, paint.y) end
     elseif key == 66 or key == 98 then
         paint.pen = not paint.pen
@@ -1542,11 +1625,11 @@ function PHONE.paint.draw()
     for y, runs in pairs(paint.runs) do
         for _, run in ipairs(runs) do
             render.setColor(paint.palette[run[3]])
-            render.drawRect(56 + (run[1] - 1) * 4, 78 + (y - 1) * 4, run[2] * 4, 4)
+            render.drawRect(56 + (run[1] - 1) * 8, 78 + (y - 1) * 8, run[2] * 8, 8)
         end
     end
     render.setColor(Color(255, 90, 130))
-    render.drawRectOutline(55 + (paint.x - 1) * 4, 77 + (paint.y - 1) * 4, 6, 6)
+    render.drawRectOutline(55 + (paint.x - 1) * 8, 77 + (paint.y - 1) * 8, 10, 10)
     for i = 1, 9 do
         local y = 84 + (i - 1) * 32
         render.setColor(paint.palette[i] or panel)
@@ -1557,7 +1640,12 @@ function PHONE.paint.draw()
         end
     end
     label(472, 343, "E", ink, smallFont)
-    label(22, 486, "Arrows  |  Space draws  |  B pen  |  1-8 colors  |  9 erases", muted, smallFont)
+    for i, text in ipairs({tostring(paint.slot), "S", "L", "T"}) do
+        render.setColor(panel)
+        render.drawRect(466, 365 + (i - 1) * 28, 30, 24)
+        label(475, 369 + (i - 1) * 28, text, accent, smallFont)
+    end
+    label(22, 486, paint.message or "Space draw | B pen | V slot | S save | L load | T send", muted, smallFont)
 end
 
 local function calculatorInput(key)
@@ -2486,11 +2574,25 @@ if isOwner then
         end
     end)
 
+    net.receive("room_painting_result", function()
+        local message, pixels, channel = net.readString(), net.readString(), net.readString()
+        if room == "" or channel ~= channelName then return end
+        if pixels == "" then
+            if gameTab == "paint" then PHONE.paint.message = message else status = message end
+            return
+        end
+        local _, runs = PHONE.paint.decode(pixels)
+        if runs and not gameTab and not showChannels and not showPrivate then
+            PHONE.paint.preview = {author = message, runs = runs}
+        end
+    end)
+
     net.receive("room_history", function()
         local newRoom = net.readString()
         roomVersion = net.readString()
         if newRoom ~= "" then directoryReceived = true end
         if newRoom ~= room then
+            PHONE.paint.preview = nil
             scroll, draft, status, waitingUntil = 0, "", "", nil
             joining, password, joinUntil, versionWarning = nil, "", nil, nil
             lastSequence, activeAlert = nil, nil
@@ -2529,6 +2631,7 @@ if isOwner then
         local newChannel = net.readString()
         PHONE.typingNames = net.readString()
         if newChannel ~= channelName then
+            PHONE.paint.preview = nil
             channelName = newChannel
             lastSequence, activeAlert, scroll, draft = nil, nil, 0, ""
             showChannels, channelWaiting, status = false, nil, ""
@@ -2836,6 +2939,14 @@ if isOwner then
             end
             return
         end
+        if not gameTab and PHONE.paint.preview then
+            if key == 8 or key == 127 or key == 169 then PHONE.paint.preview = nil end
+            return
+        end
+        if key == 169 and not gameTab and not showChannels and not showPrivate then
+            PHONE.paint.action("view")
+            return
+        end
         if key == 164 and not gameTab and not showPayments and not showPrivate then
             toggleChannels()
             return
@@ -2976,7 +3087,7 @@ if isOwner then
         [KEY.UP] = 17, [KEY.DOWN] = 18, [KEY.LEFT] = 19, [KEY.RIGHT] = 20,
         [KEY.PAGEUP] = 151, [KEY.PAGEDOWN] = 152,
         [KEY.F1] = 163, [KEY.F2] = 164,
-        [KEY.F5] = 167, [KEY.F6] = 168,
+        [KEY.F5] = 167, [KEY.F6] = 168, [KEY.F7] = 169,
         [KEY.SLASH] = 47, [KEY.PERIOD] = 46, [KEY.COMMA] = 44,
         [KEY.MINUS] = 45, [KEY.EQUAL] = 61,
         [KEY.SEMICOLON] = 59, [KEY.APOSTROPHE] = 39,
@@ -3825,6 +3936,19 @@ function PHONE.drawComputerScreen()
         label(22, 46, "# " .. channelName .. "  |  " .. versionStatus(roomVersion), accent, smallFont)
     end
 
+    if PHONE.paint.preview then
+        local preview = PHONE.paint.preview
+        render.setColor(PHONE.paint.palette[8])
+        render.drawRect(81, 92, 350, 350)
+        for y, runs in pairs(preview.runs) do
+            for _, run in ipairs(runs) do
+                render.setColor(PHONE.paint.palette[run[3]])
+                render.drawRect(81 + (run[1] - 1) * 7, 92 + (y - 1) * 7, run[2] * 7, 7)
+            end
+        end
+        label(22, 464, preview.author .. " | F7 or Backspace to close", ink)
+        return
+    end
     if #rows == 0 then label(22, 91, "No messages yet.", muted) end
     local last = #rows - scroll
     local first = math.max(1, last - ROWS_VISIBLE + 1)
