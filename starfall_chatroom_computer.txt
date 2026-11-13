@@ -1,10 +1,11 @@
 --@name Chatroom Computer
---@author v33.5
+--@author v34.6
 --@shared
 
-local CHIP_VERSION = "33.5"
+local CHIP_VERSION = "34.6"
 -- Get matching chip versions at https://github.com/Mooseyboi30/MaxwellOS
 local CHANGELOG = {
+    {"v34.6", "Website Viewer forwards site-defined button actions through a shared protocol."},
     {"v33.5", "Added an occasional Calculator greeting."},
     {"v33.4", "Expanded Calculator with scientific functions and degree/radian modes."},
     {"v33.3", "Fixed the pocket computer HUD opening crash."},
@@ -501,6 +502,7 @@ net.receive("room_directory_request", function(_, ply)
     update()
 end)
 
+local requestedWebsiteAction
 local nextWebsiteRequest, requestedWebsiteId = 0, 0
 net.receive("room_website_request", function(_, ply)
     if ply ~= owner() then return end
@@ -573,7 +575,16 @@ net.receive("room_website_request", function(_, ply)
                 bounded(options[4], 1, 512, 0), bounded(options[5], 1, 512, 0), clean(options[6], 60)
             }
             if buy[3] > 0 and buy[4] > 0 and buy[1] + buy[3] <= 512
-                and buy[2] + buy[4] <= page.height and buy[5] ~= "" then page.buy = buy end
+                and buy[2] + buy[4] <= page.height and buy[5] ~= "" then
+                page.buy = buy
+                local action = options[7]
+                if buy[5] == "generate_haiku_v1" or buy[5] == "plinko_drop_v1" then
+                    action = buy[5]
+                end
+                if type(action) == "string" and #action <= 40 and action:match("^[A-Za-z0-9_-]+$") then
+                    page.action = action
+                end
+            end
             for i = 1, math.min(#result[4], 5) do page.lines[i] = clean(result[4][i], 42) end
             for i = 1, 3 do page.amounts[i] = bounded(amounts[i], 1, 2147483647, 0) end
         end
@@ -582,11 +593,12 @@ net.receive("room_website_request", function(_, ply)
     local bytes = 16
     for i = 1, count do bytes = bytes + 4 + #sites[i].name end
     if page then
-        bytes = bytes + 40 + #page.title + #page.face + (page.buy and #page.buy[5] or 0)
+        bytes = bytes + 44 + #(page.action or "") + #page.title + #page.face + (page.buy and #page.buy[5] or 0)
         for _, line in ipairs(page.lines) do bytes = bytes + #line + 1 end
     end
     if net.getBytesLeft() < bytes then return end
     requestedWebsiteId = selected and id or 0
+    requestedWebsiteAction = page and page.action
     net.start("room_website_pages")
     net.writeUInt(count, 4)
     for i = 1, count do
@@ -606,6 +618,7 @@ net.receive("room_website_request", function(_, ply)
         if page.buy then
             for i = 1, 4 do net.writeUInt(page.buy[i], 10) end
             net.writeString(page.buy[5])
+            net.writeString(page.action or "")
         end
         if page.mode == 1 then net.writeUInt(page.uptime, 32) end
         if page.mode == 2 then
@@ -621,11 +634,11 @@ local nextWebsiteButton = 0
 net.receive("room_website_button", function(_, ply)
     if ply ~= owner() or timer.curtime() < nextWebsiteButton then return end
     local id = net.readUInt(16)
-    if id == 0 or id ~= requestedWebsiteId then return end
+    if id == 0 or id ~= requestedWebsiteId or not requestedWebsiteAction then return end
     local site = entity(id)
     if not site or not site:isValid() or site:getClass() ~= "starfall_processor" then return end
     nextWebsiteButton = timer.curtime() + 0.5
-    pcall(hook.runRemote, site, "starfall_website_button_v1")
+    pcall(hook.runRemote, site, "starfall_website_button_v1", requestedWebsiteAction)
 end)
 
 local nextWebsiteDonation = 0
@@ -1105,7 +1118,7 @@ function websiteControls.buy(x, y)
     if x then
         if x < buy[1] or x >= buy[1] + buy[3] or y < 0 or y >= 512 or y < top or y >= top + buy[4] then return end
     elseif top < 0 or top + buy[4] > 512 then return end
-    if buy[5] == "generate_haiku_v1" then
+    if page.action ~= "" then
         if net.getBytesLeft() < 32 then return end
         net.start("room_website_button")
         net.writeUInt(page.id, 16)
@@ -2486,6 +2499,7 @@ if isOwner then
                 page.buy = {}
                 for i = 1, 4 do page.buy[i] = net.readUInt(10) end
                 page.buy[5] = net.readString()
+                page.action = net.readString()
             end
             page.amounts, page.lines = {}, {}
             if page.demo then page.startedAt = timer.curtime() - net.readUInt(32) / 10 end

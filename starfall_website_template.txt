@@ -1,0 +1,28 @@
+--@name MaxwellOS Website Template
+--@shared
+
+local NAME = "Untitled Site"
+local FONT = {"Roboto", 22, 500}
+-- height, x, y, width, height, fallback text, action ID
+local OPTIONS = {512, 96, 370, 320, 56, "Example button", "example_click"}
+local clicks = 0
+
+hook.add("remote", "maxwellos_website_template", function(_, user, protocol, action)
+    if not SERVER then return end
+    if protocol == "starfall_website_discover_v1" then
+        return chip():entIndex(), NAME
+    elseif protocol == "starfall_website_page_v1" then
+        return chip():entIndex(), NAME, NAME, {"Edit this template to build your site."},
+            false, FONT, false, false, OPTIONS
+    elseif protocol == "starfall_website_screen_v1" then
+        return {
+            {"rect", 0, 0, 512, 512, 21, 32, 48},
+            {"text", 28, 28, 456, 34, 245, 250, 255, NAME},
+            {"rect", 96, 370, 320, 56, 45, 115, 108},
+            {"text", 116, 385, 280, 30, 245, 250, 255, "Example button: " .. clicks}
+        }
+    elseif protocol == "starfall_website_button_v1" and action == "example_click"
+        and user and user:isValid() then
+        clicks = clicks + 1
+    end
+end)

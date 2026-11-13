@@ -10,3 +10,13 @@ A Starfall computer for Garry's Mod with a desktop launcher, chatrooms, a websit
 4. Use the standalone demo chip for Calculator and Minesweeper without a chatroom or website server.
 
    Congrats to https://steamcommunity.com/id/notanotherminge/ for making his OS link with my server base
+
+## MaxwellNET
+
+MaxwellNET is MaxwellOS's in-game network for discovering Starfall chatrooms and websites on the same Garry's Mod server. Open **Chatrooms** to join a room hosted by a MaxwellOS server chip, or open **Website Viewer** to browse standalone website chips. Website Viewer works without joining a chatroom.
+
+MaxwellNET sites publish their own text, graphics, animations, and button actions through the Website Viewer protocol. A site can use that protocol to run its own games or interactive pages. Discovery and site traffic happen inside Garry's Mod. GitHub hosts the chip downloads and supplies version information for the update checker.
+
+## Website development
+
+Start with the [website template](starfall_website_template.txt) and the [Website Viewer protocol guide](WEBSITE_API.md).
