@@ -1,10 +1,11 @@
 --@name Chatroom Computer
---@author v27.4
+--@author v27.5
 --@shared
 
-local CHIP_VERSION = "27.4"
+local CHIP_VERSION = "27.5"
 -- Get matching chip versions at https://github.com/Mooseyboi30/MaxwellOS
 local CHANGELOG = {
+    {"v27.5", "Added live typing indicators for the current chatroom channel."},
     {"v27.4", "Added GitHub update links and merged the pocket computer with lockable typing and private message alerts."},
     {"v27.3", "Website Viewer supports scrolling and purchase inquiry buttons on sites that publish them."},
     {"v27.2", "Added a desktop Settings app for changing colors and the computer name after setup."},
@@ -88,6 +89,7 @@ local PROTOCOL = "sf_chatroom_v2"
 local server
 local room
 local roomVersion = ""
+local typingNames = ""
 local channelName = "General"
 local roomNotice = ""
 local sequence = 0
@@ -115,7 +117,7 @@ local nextChessHint = 0
 
 local function sendHistory()
     if not historyDirty or not ready or not owner():isValid() then return end
-    local bytes = 32 + #(room or "") + #roomNotice + #channelName
+    local bytes = 32 + #(room or "") + #roomNotice + #channelName + #typingNames
     for _, entry in ipairs(history) do bytes = bytes + #entry.line + 2 end
     if net.getBytesLeft() < bytes then return end
     net.start("room_history")
@@ -129,6 +131,7 @@ local function sendHistory()
     net.writeString(roomNotice)
     net.writeUInt(sequence, 32)
     net.writeString(channelName)
+    net.writeString(typingNames)
     net.send(owner())
     historyDirty = false
 end
@@ -303,7 +306,7 @@ end
 local function clearRoom(notice)
     server, room, sequence = nil, nil, 0
     roomVersion = ""
-    channelName = "General"
+    channelName, typingNames = "General", ""
     roomNotice = notice or ""
     history = {}
     paymentQuote = nil
@@ -345,7 +348,9 @@ local function update()
         return
     end
 
-    historyDirty = historyDirty or restarted or room ~= reply[1] or sequence ~= reply[2]
+    local typing = type(reply[7]) == "string" and reply[7]:sub(1, 40) or ""
+    historyDirty = historyDirty or restarted or room ~= reply[1] or sequence ~= reply[2] or typingNames ~= typing
+    typingNames = typing
     room = reply[1]
     channelName = type(reply[5]) == "string" and reply[5] or "General"
     sequence = reply[2]
@@ -704,6 +709,16 @@ net.receive("room_leave", function(_, ply)
     if ply ~= owner() or not ready or not server then return end
     request(server, "leave")
     clearRoom()
+end)
+
+local nextTyping = 0
+net.receive("room_typing", function(_, ply)
+    if ply ~= owner() or not server then return end
+    local active = net.readBool()
+    local now = timer.curtime()
+    if active and now < nextTyping then return end
+    nextTyping = active and now + 0.75 or 0
+    request(server, "typing", active)
 end)
 
 net.receive("room_post", function(_, ply)
@@ -1489,10 +1504,21 @@ local function calculatorClick(x, y)
     return true
 end
 
+function PHONE.reportTyping(active)
+    if room == "" or net.getBytesLeft() < 32 then return end
+    local now = timer.curtime()
+    if active and now < (PHONE.nextTyping or 0) then return end
+    PHONE.nextTyping = active and now + 1 or 0
+    net.start("room_typing")
+    net.writeBool(active)
+    net.send()
+end
+
 local function insertEmoji()
     local symbol = EMOJIS[selectedEmoji]
     if #draft + #symbol <= 160 then
         draft = draft .. symbol
+        PHONE.reportTyping(true)
         emojiDraftEnds[#draft] = symbol
         emojiOpen, status = false, ""
     else
@@ -2465,6 +2491,7 @@ if isOwner then
         if notice ~= "" then status = notice end
         local newSequence = net.readUInt(32)
         local newChannel = net.readString()
+        PHONE.typingNames = net.readString()
         if newChannel ~= channelName then
             channelName = newChannel
             lastSequence, activeAlert, scroll, draft = nil, nil, 0, ""
@@ -2805,9 +2832,14 @@ if isOwner then
                 net.send()
             end
         elseif key == 127 or key == 8 then
+            local previous = draft
             eraseDraftCharacter()
+            if previous ~= draft then PHONE.reportTyping(draft ~= "") end
         else
-            if character and #draft < 160 then draft = draft .. character end
+            if character and #draft < 160 then
+                draft = draft .. character
+                PHONE.reportTyping(true)
+            end
         end
     end
 
@@ -3762,6 +3794,13 @@ function PHONE.drawComputerScreen()
         label(22, 88 + (i - first) * 22, row.text, row.alert and alertColor or (row.mention and accent or ink), row.face)
     end
 
+    if PHONE.typingNames and PHONE.typingNames ~= "" then
+        local names = PHONE.typingNames
+        local firstName, others = names:match("^([^ ]+) %+(%d+)$")
+        local who = firstName and (firstName .. " and " .. others .. " more are") or (names .. " is")
+        local line = wrapText(who .. " typing in #" .. channelName, 468, smallFont)[1]
+        label(22, 64, line, muted, smallFont)
+    end
     local prompt = focused and ("> " .. draft .. "_")
         or (draft ~= "" and draft or "Use the wired keyboard to type")
     if prompt ~= lastPrompt then

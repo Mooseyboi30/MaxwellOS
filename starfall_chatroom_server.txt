@@ -1,10 +1,10 @@
 --@name Chatroom Server
---@author v27.4
+--@author v27.5
 --@shared
 
 -- Match NETWORK in the computer chip. Set the room name and password on the linked screen.
 local NETWORK = "lobby"
-local CHIP_VERSION = "27.4"
+local CHIP_VERSION = "27.5"
 -- Get matching chip versions at https://github.com/Mooseyboi30/MaxwellOS
 local POSTS_TOP, POSTS_BOTTOM = 160, 480
 local POSTS_TRACK_X = 473
@@ -1053,6 +1053,10 @@ hook.add("remote", "chatroom", function(sender, senderOwner, protocol, network, 
         gameRevision = gameRevision + 1
         return "ok"
     end
+    if action == "typing" then
+        session.typingUntil = value == true and now + 4 or nil
+        return
+    end
     if action == "channel_directory" then
         local names = {}
         for i, id in ipairs(channelOrder) do names[i] = id .. ":" .. channels[id].name end
@@ -1060,7 +1064,7 @@ hook.add("remote", "chatroom", function(sender, senderOwner, protocol, network, 
     end
     if action == "channel_join" and type(value) == "number" then
         if not channels[value] then return "That channel does not exist." end
-        session.channel = value
+        session.channel, session.typingUntil = value, nil
         return "ok"
     end
     if action == "private_state" then return privateState(session, now) end
@@ -1103,10 +1107,21 @@ hook.add("remote", "chatroom", function(sender, senderOwner, protocol, network, 
                 if message.alert then alerts[#unread] = true end
             end
         end
-        return roomName, channel.sequence, unread, alerts, channel.name, session.channel
+        local typists = {}
+        for other, member in pairs(sessions) do
+            if other ~= sender and not member.removed and member.channel == session.channel
+                and member.expires > now and (member.typingUntil or 0) > now then
+                typists[#typists + 1] = member.name
+            end
+        end
+        table.sort(typists)
+        local typing = typists[1] or ""
+        if #typists > 1 then typing = typing .. " +" .. (#typists - 1) end
+        return roomName, channel.sequence, unread, alerts, channel.name, session.channel, typing
     end
 
     if (action ~= "post" and action ~= "private_send") or type(value) ~= "string" then return end
+    if action == "post" then session.typingUntil = nil end
     if #value > 160 then return "Use 1 to 160 bytes of text." end
     local message = cleanChatText(value)
     if message == "" then
