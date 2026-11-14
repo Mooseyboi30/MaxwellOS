@@ -3,7 +3,7 @@
 A Starfall computer for Garry's Mod with a desktop launcher, chatrooms, a website viewer, and games.
 
 ## Setup
-
+EXTRA: DO NOT COPY THE ENTIRE TEXT FILE INTO A NEW STARFALL CHIP INSIDE GMOD, THIS WILL MOST LIKEY BREAK IT AND MESS UP THE ENTIRE SYSTEM. Instead download the .zip, unzip it, then copy the chip you want into C:\Program Files (x86)\Steam\steamapps\common\GarrysMod\garrysmod\data\starfall, DO NOT DO ANY OTHER ROUTE THIS WILL BREAK IT BECAUSE YOU MIGHT MISS IMPORTANT CODE.
 1. Upload the computer chip with StarfallEx and link it to a Starfall screen.
 2. Wire a Wiremod Keyboard's Keys and User outputs to KeyboardKeys and KeyboardUser. The optional Power input turns the display off at 0.
 3. Upload the chatroom server chip to host chat, or a website chip to publish a site. Open Chatrooms or Website Viewer from the desktop.
