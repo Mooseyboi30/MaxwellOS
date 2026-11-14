@@ -1,10 +1,12 @@
 --@name Chatroom Computer
---@author v36.1
+--@author v37.2
 --@shared
 
-local CHIP_VERSION = "36.1"
+local CHIP_VERSION = "37.2"
 -- Get matching chip versions at https://github.com/Mooseyboi30/MaxwellOS
 local CHANGELOG = {
+    {"v37.2", "Placed Settings and Credits side by side at the bottom of Apps."},
+    {"v37.1", "Added project Credits and an HL2 Music Player."},
     {"v36.1", "MaxwellNET supports timed website sound cues, including Plinko drops and payouts."},
     {"v36.0", "Added a five-slot save and load menu to Paint."},
     {"v35.9", "Added scrolling to the desktop app and game lists."},
@@ -1200,14 +1202,16 @@ local GAMES = {
     {tab = "trail", name = "Oregon Trail", detail = "Expedition for up to four"}
 }
 local APPS = {
+    {tab = "music", name = "HL2 Music Player", detail = "Play Half-Life 2 tracks"},
     {tab = "chatrooms", name = "Chatrooms", detail = "Find and join a room"},
     {tab = "website", name = "Website Viewer", detail = "Browse Starfall sites"},
     {tab = "calculator", name = "Calculator", detail = "Basic arithmetic"},
     {tab = "hud", name = "HUD", detail = "Toggle the chat overlay"},
     {tab = "payments", name = "Payments", detail = "Send in-game money", needsRoom = true},
     {tab = "changelog", name = "Changelog", detail = "Browse release history"},
+    {tab = "paint", name = "Paint", detail = "50 x 50 pixel canvas"},
     {tab = "settings", name = "Settings", detail = "Colors and computer name"},
-    {tab = "paint", name = "Paint", detail = "50 x 50 pixel canvas"}
+    {tab = "credits", name = "Credits", detail = "Project contributors and links"}
 }
 local menuOptions = APPS
 local LAUNCHER_TOP, TILE_WIDTH, TILE_HEIGHT, TILE_GAP = 132, 232, 68, 16
@@ -2166,6 +2170,92 @@ local function handlePayment(key, enter)
     end
 end
 
+PHONE.extras = {
+    credits = {
+        {"Project creator", "Turkey eating maxwell the cat", "https://steamcommunity.com/id/Maxwellthecatfromgmod/"},
+        {"Contributor", "electr0n"},
+        {"Special thanks", "izkrenada", "https://steamcommunity.com/id/izkrenofficialuser"},
+        {"Source and downloads", "GitHub", "https://github.com/Mooseyboi30/MaxwellOS"}
+    },
+    music = {
+        {"Hazardous Environments", "HL2_song1.mp3"},
+        {"CP Violation", "HL2_song4.mp3"},
+        {"Triage at Dawn", "HL2_song23_SuitSong3.mp3"},
+        {"Apprehension and Evasion", "HL2_song17.mp3"}
+    },
+    selected = {credits = 1, music = 1}
+}
+
+function PHONE.extras.stop()
+    local extras = PHONE.extras
+    if extras.sound then pcall(function() extras.sound:destroy() end) end
+    extras.sound = nil
+    extras.message = nil
+end
+
+function PHONE.extras.activate(tab)
+    local extras = PHONE.extras
+    local entry = extras[tab][extras.selected[tab]]
+    if tab == "credits" then
+        if entry[3] then
+            setClipboardText(entry[3])
+            extras.message = "Link copied: " .. entry[3]
+        end
+        return
+    end
+    extras.stop()
+    local ok = pcall(function()
+        extras.sound = sound.create(player(), "music/" .. entry[2])
+        extras.sound:setSoundLevel(0)
+        extras.sound:play()
+        extras.sound:setVolume(0.5)
+    end)
+    if ok then extras.message = "Playing " .. entry[1]
+    else
+        extras.stop()
+        extras.message = "Playback unavailable. Check sound permission."
+    end
+end
+
+function PHONE.extras.key(tab, key, enter)
+    local extras = PHONE.extras
+    if enter then extras.activate(tab)
+    elseif key == 17 then extras.selected[tab] = math.max(1, extras.selected[tab] - 1)
+    elseif key == 18 then extras.selected[tab] = math.min(#extras[tab], extras.selected[tab] + 1)
+    elseif tab == "music" and key == 32 then extras.stop() end
+end
+
+function PHONE.extras.click(tab, x, y)
+    local extras = PHONE.extras
+    if tab == "music" and y >= 400 and y < 446 then extras.stop(); return end
+    local index = math.floor((y - 94) / 75) + 1
+    if extras[tab][index] and (y - 94) % 75 < 64 then
+        extras.selected[tab] = index
+        extras.activate(tab)
+    end
+end
+
+function PHONE.extras.draw(tab)
+    local extras = PHONE.extras
+    for i, entry in ipairs(extras[tab]) do
+        local y = 94 + (i - 1) * 75
+        render.setColor(panel)
+        render.drawRect(16, y, 480, 64)
+        label(27, y + 9, entry[1], extras.selected[tab] == i and accent or ink)
+        if tab == "credits" then
+            label(27, y + 34, entry[2], muted, smallFont)
+            if entry[3] then label(402, y + 34, "Copy link", accent, smallFont) end
+        end
+    end
+    if tab == "music" then label(27, 412, "Stop  |  Space", accent) end
+    if extras.message then
+        for i, line in ipairs(wrapText(extras.message, 460, smallFont)) do
+            label(22, 451 + (i - 1) * 16, line, muted, smallFont)
+        end
+    end
+    label(22, 487, tab == "credits" and "Up/Down selects | Enter copies link" or "Up/Down selects | Enter plays", muted, smallFont)
+end
+
 local function changeGameTab(tab)
     if room == "" and (MULTIPLAYER_TABS[tab] or tab == "payments") then return end
     if gameTab == "payments" and paymentWaiting then return end
@@ -2192,6 +2282,7 @@ local function changeGameTab(tab)
         websiteFrame, websiteFrameSite = nil, nil
     end
     if tab == "calculator" and gameTab ~= tab then calculator.streamGreeting = math.random(10) == 1 end
+    if gameTab == "music" or gameTab == "credits" then PHONE.extras.stop() end
     gameTab = tab
     if tab == "website" then startWebsitePolling() end
     if tab ~= "menu" then lastApp = tab end
@@ -2766,6 +2857,8 @@ if isOwner then
                     end
                     return
                 elseif gameTab == "paint" then PHONE.paint.click(x, y); return
+                elseif PHONE.extras[gameTab] and (gameTab == "credits" or gameTab == "music") then
+                    PHONE.extras.click(gameTab, x, y); return
                 elseif gameTab == "changelog" then
                     if y >= 414 and y < 454 then
                         if x < 136 then changelogPage = math.min(#CHANGELOG, changelogPage + 1)
@@ -3021,6 +3114,7 @@ if isOwner then
         keyboardActive = net.readBool()
         local powered = net.readBool()
         if powered ~= poweredOn then
+            if not powered then PHONE.extras.stop() end
             poweredOn = powered
             if not powered and PHONE.open then PHONE.setOpen(false) end
             startupUntil = powered and timer.curtime() + themes.startupDuration or 0
@@ -3129,6 +3223,7 @@ if isOwner then
             return
         end
         if gameTab == "paint" then PHONE.paint.key(key, enter); return end
+        if gameTab == "credits" or gameTab == "music" then PHONE.extras.key(gameTab, key, enter); return end
         if gameTab == "changelog" then
             if key == 19 or key == 151 then changelogPage = math.min(#CHANGELOG, changelogPage + 1)
             elseif key == 20 or key == 152 then changelogPage = math.max(1, changelogPage - 1)
@@ -3378,7 +3473,7 @@ if isOwner then
             end
         end
     end)
-    setupPermissionRequest({"enablehud", "render.hud", "input", "input.enablecursor", "input.lockcontrols", "http.get"},
+    setupPermissionRequest({"enablehud", "render.hud", "input", "input.enablecursor", "input.lockcontrols", "http.get", "sound.create"},
         "Optional pocket computer with mouse and keyboard controls", true)
 
     function PHONE.activateHud()
@@ -4121,6 +4216,7 @@ local function renderAppsPanel()
     elseif gameTab == "calculator" then renderCalculator()
     elseif gameTab == "website" then renderWebsite()
     elseif gameTab == "paint" then PHONE.paint.draw()
+    elseif gameTab == "credits" or gameTab == "music" then PHONE.extras.draw(gameTab)
     elseif gameTab == "changelog" then renderChangelog()
     elseif gameTab == "settings" then
         render.setColor(panel)
@@ -4205,6 +4301,8 @@ function PHONE.drawComputerScreen()
     elseif gameTab == "calculator" then title = "Calculator"
     elseif gameTab == "website" then title = "Website Viewer"
     elseif gameTab == "paint" then title = "Paint"
+    elseif gameTab == "credits" then title = "Credits"
+    elseif gameTab == "music" then title = "HL2 Music Player"
     elseif gameTab == "changelog" then title = "Changelog"
     elseif gameTab == "settings" then title = "Settings"
     elseif gameTab == "hud" then title = "HUD"
