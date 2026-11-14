@@ -9,8 +9,16 @@ local OPTIONS = {512, buttons = {
     {266, 370, 150, 56, "Reset", "reset"}
 }}
 local clicks = 0
+local soundEvents = setmetatable({}, {__mode = "k"})
+local nextSoundId = 0
 local actions = {
-    increment = function() clicks = clicks + 1; return "click" end,
+    increment = function(user)
+        clicks = clicks + 1
+        nextSoundId = nextSoundId + 1
+        -- The viewer polls for frames. Keep this cue available for one second.
+        soundEvents[user] = {at = timer.curtime() + 1, token = "example:" .. nextSoundId}
+        return "click"
+    end,
     reset = function() clicks = 0; return "success" end
 }
 
@@ -22,7 +30,7 @@ hook.add("remote", "maxwellos_website_template", function(_, user, protocol, act
         return chip():entIndex(), NAME, NAME, {"Edit this template to build your site."},
             false, FONT, false, false, OPTIONS
     elseif protocol == "starfall_website_screen_v1" then
-        return {
+        local frame = {
             {"rect", 0, 0, 512, 512, 21, 32, 48},
             {"text", 28, 28, 456, 34, 245, 250, 255, NAME},
             {"text", 28, 110, 456, 34, 245, 250, 255, "Count: " .. clicks},
@@ -31,8 +39,14 @@ hook.add("remote", "maxwellos_website_template", function(_, user, protocol, act
             {"rect", 266, 370, 150, 56, 60, 76, 112},
             {"text", 280, 385, 120, 30, 245, 250, 255, "Reset"}
         }
+        local event = user and soundEvents[user]
+        local now = timer.curtime()
+        if event and now >= event.at and now < event.at + 1 then
+            return frame, "win", event.token
+        end
+        return frame
     elseif protocol == "starfall_website_button_v1" and user and user:isValid() then
         local handler = actions[action]
-        if handler then return handler() end
+        if handler then return handler(user) end
     end
 end)

@@ -10,7 +10,7 @@ Register a Starfall `remote` hook with arguments `sender, user, protocol, action
 | --- | --- | --- |
 | `starfall_website_discover_v1` | Server | Chip entity index, site name |
 | `starfall_website_page_v1` | Server | Chip index, site name, title, fallback lines, mode, font, amounts, uptime, options |
-| `starfall_website_screen_v1` | Server | Array of drawing commands. A client hook can optionally provide frames directly. |
+| `starfall_website_screen_v1` | Server | Array of drawing commands, optionally followed by a timed sound cue and event token on the server. A client hook can optionally provide visual frames directly. |
 | `starfall_website_button_v1` | Server | Handle the action ID passed as the fourth hook argument. The second argument is the requesting computer owner. |
 
 For regular sites, return `false` for mode, amounts, and uptime. The font is `{family, size, weight}`. The viewer scales it to fit the mini screen. Keep fallback text to five lines of up to 42 printable ASCII characters each. Site names allow 32 characters, and titles allow 26.
@@ -48,3 +48,15 @@ Handle only the action IDs your site defines. Validate the requesting player, pe
 ## Sound cues
 
 On MaxwellOS v35.8 or later, return a cue ID from the server button hook after handling the action. Supported IDs are `click`, `success`, `error`, `splash`, and `chime`. The viewer plays the built-in sound once for the player who pressed the button, positioned at the linked screen. The pocket computer plays it locally. Return nothing for a silent action. See the template for examples.
+
+### Timed sounds
+
+MaxwellOS v36.1 or later can play a cue when a server-side event occurs, such as a ball dropping or a payout completing. Return the cue and a token after the drawing frame from the server's `starfall_website_screen_v1` handler.
+
+```lua
+return frame, "win", event.token
+```
+
+The timed cue IDs are `drop` (click) and `win` (chime). Give each event a distinct string token of up to 48 bytes. Keep the token stable across frame polls for that event so the viewer plays it once. Return just the frame when there is no active cue. Keep a cue available briefly because the viewer polls for frames, and use the requesting player argument to keep private events scoped to the right viewer.
+
+Timed cues use the server frame relay. For sites that need them, serve the frame from the server and leave out the optional client frame hook. Cues play only while that site is selected. The template plays an immediate click on **Add one**, then a chime one second later.
