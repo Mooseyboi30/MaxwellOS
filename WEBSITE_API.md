@@ -44,3 +44,7 @@ The first field is page height. Each button contains x, y, width, height, prompt
 The action ID uses up to 40 ASCII letters, digits, underscores, or hyphens. Define a Lua function for each action in the website chip and call it from the server's `starfall_website_button_v1` handler. The template shows how to dispatch IDs through a Lua function table.
 
 Handle only the action IDs your site defines. Validate the requesting player, permissions, and game state in your own handler before changing state or requesting in-game currency. Website Viewer supplies the display and input. The site owns its actions and data.
+
+## Sound cues
+
+On MaxwellOS v35.8 or later, return a cue ID from the server button hook after handling the action. Supported IDs are `click`, `success`, `error`, `splash`, and `chime`. The viewer plays the built-in sound once for the player who pressed the button, positioned at the linked screen. The pocket computer plays it locally. Return nothing for a silent action. See the template for examples.

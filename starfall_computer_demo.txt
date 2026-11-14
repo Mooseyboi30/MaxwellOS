@@ -94,7 +94,13 @@ return
 end
 
 local calculator = {entry = "", result = false}
-local CALCULATOR_KEYS = {"7", "8", "9", "/", "4", "5", "6", "*", "1", "2", "3", "-", "0", ".", "=", "+"}
+local CALCULATOR_KEYS = {
+    "sin", "cos", "tan", "sqrt", "x^2", "log",
+    "7", "8", "9", "/", "^", "ln",
+    "4", "5", "6", "*", "%", "pi",
+    "1", "2", "3", "-", "+/-", "e",
+    "0", ".", "=", "+", "Angle", "1/x"
+}
 
 local gameTab = "menu"
 local poweredOn = true
@@ -103,8 +109,14 @@ local STARTUP_DURATION = 1.1
 local lastApp = false
 local selectedGame = 1
 
-local GAMES = {{tab = "mines", name = "Minesweeper", detail = "Solo puzzles with No Guess"}}
-local APPS = {{tab = "calculator", name = "Calculator", detail = "Basic arithmetic"}}
+local GAMES = {
+    {tab = "mines", name = "Minesweeper", detail = "Solo puzzles with No Guess"},
+    {tab = "squadron", name = "Star Squadron", detail = "Solo arcade shooter"}
+}
+local APPS = {
+    {tab = "calculator", name = "Calculator", detail = "Scientific calculator"},
+    {tab = "paint", name = "Paint", detail = "50 x 50 pixel canvas"}
+}
 local menuOptions = APPS
 local LAUNCHER_TOP, TILE_WIDTH, TILE_HEIGHT = 132, 232, 84
 
@@ -113,7 +125,7 @@ local function selectMenuTab(options)
 end
 
 local function openApp()
-    gameTab = menuOptions[1].tab
+    gameTab = menuOptions[selectedGame].tab
     lastApp = gameTab
 end
 
@@ -184,8 +196,430 @@ local function label(x, y, value, color, face)
     render.drawText(x, y, value)
 end
 
+local offline = {}
+
+offline.squadron = {}
+
+function offline.squadron.wave()
+    offline.squadron.enemies, offline.squadron.shots, offline.squadron.bolts = {}, {}, {}
+    offline.squadron.time, offline.squadron.nextBolt, offline.squadron.nextDive = 0, 3.5, 4
+    for row = 1, 3 do
+        for column = 1, 8 do
+            local x, y = 95 + (column - 1) * 46, 105 + row * 35
+            offline.squadron.enemies[#offline.squadron.enemies + 1] = {
+                x = -32, y = 84, baseX = x, baseY = y, kind = row,
+                hp = row == 1 and 2 or 1,
+                arrive = (row - 1) * 0.65 + (column - 1) * 0.08
+            }
+        end
+    end
+end
+
+function offline.squadron.start()
+    offline.squadron.x, offline.squadron.score, offline.squadron.lives, offline.squadron.level = 256, 0, 3, 1
+    offline.squadron.wave()
+end
+
+function offline.squadron.key(key, enter)
+    if not offline.squadron.lives or offline.squadron.lives == 0 then
+        if enter then offline.squadron.start() end
+    elseif key == 19 or key == 20 then
+        offline.squadron.x = math.max(35, math.min(477, offline.squadron.x + (key == 19 and -18 or 18)))
+    elseif (key == 32 or enter) and #offline.squadron.shots < 6 then
+        offline.squadron.shots[#offline.squadron.shots + 1] = {x = offline.squadron.x, y = 411}
+    end
+end
+
+function offline.squadron.update(now)
+    local dt = math.min(0.05, math.max(0, now - (offline.squadron.lastTick or now)))
+    offline.squadron.lastTick = now
+    if not offline.squadron.lives or offline.squadron.lives == 0 then return end
+    offline.squadron.time = offline.squadron.time + dt
+    local enemies, shots, bolts = offline.squadron.enemies, offline.squadron.shots, offline.squadron.bolts
+    for _, enemy in ipairs(enemies) do
+        local t = offline.squadron.time
+        local age = t - enemy.arrive
+        local x = enemy.baseX + 44 * math.sin(t * 1.8)
+        local y = enemy.baseY + 10 * math.sin(t * 2 + enemy.baseX / 55)
+        enemy.active = age >= 0
+        if age < 2 then
+            local u = math.max(0, age / 2)
+            local side = enemy.kind % 2 == 0 and 1 or -1
+            local edge = 256 + side * 288
+            enemy.x = edge + (x - edge) * u - side * 78 * math.sin(math.pi * u)
+            enemy.y = 85 + (y - 85) * u + 125 * math.sin(math.pi * u)
+        elseif enemy.dive then
+            local u = (t - enemy.dive) / 2
+            if u >= 1 then
+                enemy.dive = nil
+                enemy.x, enemy.y = x, y
+            else
+                enemy.x = x + 66 * math.sin(2 * math.pi * u)
+                enemy.y = y + (393 - y) * math.sin(math.pi * u)
+            end
+        else
+            enemy.x, enemy.y = x, y
+        end
+    end
+    for i = #shots, 1, -1 do
+        local shot = shots[i]
+        shot.y = shot.y - 450 * dt
+        for j = #enemies, 1, -1 do
+            local enemy = enemies[j]
+            if enemy.active and math.abs(shot.x - enemy.x) < 15 and math.abs(shot.y - enemy.y) < 15 then
+                enemy.hp = enemy.hp - 1
+                if enemy.hp == 0 then
+                    table.remove(enemies, j)
+                    offline.squadron.score = offline.squadron.score + (4 - enemy.kind) * 75
+                end
+                shot.y = 0
+                break
+            end
+        end
+        if shot.y < 90 then table.remove(shots, i) end
+    end
+    if #enemies == 0 then
+        offline.squadron.level = offline.squadron.level + 1
+        offline.squadron.wave()
+        return
+    end
+    if offline.squadron.time >= offline.squadron.nextDive then
+        local divers = {}
+        for _, enemy in ipairs(enemies) do
+            if enemy.kind ~= 1 and not enemy.dive then divers[#divers + 1] = enemy end
+        end
+        if #divers > 0 then divers[math.random(#divers)].dive = offline.squadron.time end
+        offline.squadron.nextDive = offline.squadron.time + math.max(0.8, 2.8 - offline.squadron.level * 0.18)
+    end
+    if offline.squadron.time >= offline.squadron.nextBolt then
+        local enemy = enemies[math.random(#enemies)]
+        bolts[#bolts + 1] = {x = enemy.x, y = enemy.y + 10}
+        offline.squadron.nextBolt = offline.squadron.time + math.max(0.28, 1.1 - offline.squadron.level * 0.09)
+    end
+    for i = #bolts, 1, -1 do
+        local bolt = bolts[i]
+        bolt.y = bolt.y + 200 * dt
+        if math.abs(bolt.x - offline.squadron.x) < 15 and math.abs(bolt.y - 425) < 13 then
+            offline.squadron.lives = offline.squadron.lives - 1
+            offline.squadron.bolts = {}
+            return
+        end
+        if bolt.y > 453 then table.remove(bolts, i) end
+    end
+end
+
+function offline.squadron.draw()
+    if not offline.squadron.lives then
+        label(22, 100, "Press Enter to start", accent)
+        return
+    end
+    label(22, 83, "Score " .. offline.squadron.score .. "    Wave " .. offline.squadron.level .. "    Lives " .. offline.squadron.lives, ink)
+    if offline.squadron.lives == 0 then
+        label(22, 155, "Game over. Press Enter to restart.", alertColor)
+        return
+    end
+    render.setColor(accent)
+    render.drawRect(offline.squadron.x - 14, 426, 28, 9)
+    render.drawRect(offline.squadron.x - 4, 416, 8, 12)
+    for _, shot in ipairs(offline.squadron.shots) do render.drawRect(shot.x - 2, shot.y, 4, 10) end
+    render.setColor(alertColor)
+    for _, enemy in ipairs(offline.squadron.enemies) do
+        render.setColor(enemy.kind == 1 and alertColor or (enemy.kind == 2 and accent or ink))
+        render.drawRect(enemy.x - 12, enemy.y - 5, 24, 10)
+        if enemy.hp == 2 then render.drawRect(enemy.x - 16, enemy.y - 8, 32, 3) end
+        render.drawRect(enemy.x - 7, enemy.y - 10, 14, 20)
+    end
+    for _, bolt in ipairs(offline.squadron.bolts) do render.drawRect(bolt.x - 2, bolt.y, 4, 8) end
+    label(22, 480, "Left/Right moves  |  Space or Enter fires  |  F1 Desktop", muted, smallFont)
+end
+
+offline.paint = {
+    x = 25, y = 25, color = 1, slot = 1, paletteTop = 1, rows = {}, runs = {},
+    palette = {Color(20, 20, 28), Color(220, 55, 68), Color(245, 145, 45),
+        Color(249, 212, 65), Color(49, 164, 102), Color(55, 113, 220),
+        Color(153, 79, 213), Color(255, 255, 255),
+        Color(124, 34, 49), Color(191, 67, 100), Color(245, 115, 144), Color(255, 177, 188),
+        Color(173, 79, 38), Color(222, 106, 61), Color(247, 181, 98), Color(255, 218, 174),
+        Color(176, 142, 47), Color(212, 197, 66), Color(184, 216, 80), Color(233, 244, 161),
+        Color(31, 95, 70), Color(84, 194, 111), Color(42, 177, 152), Color(154, 229, 204),
+        Color(42, 68, 131), Color(42, 139, 181), Color(66, 196, 223), Color(166, 218, 255),
+        Color(87, 49, 145), Color(124, 108, 214), Color(203, 114, 218), Color(232, 182, 244),
+        Color(110, 73, 53), Color(151, 151, 163)}
+}
+
+function offline.paint.rebuildRow(y)
+    local paint = offline.paint
+    local row = paint.rows[y] or {}
+    local runs = {}
+    local previous
+    for column = 1, 50 do
+        local color = row[column]
+        if color and color ~= previous then
+            runs[#runs + 1] = {column, 1, color}
+        elseif color then
+            runs[#runs][2] = runs[#runs][2] + 1
+        end
+        previous = color
+    end
+    paint.runs[y] = runs
+end
+
+function offline.paint.pixel(x, y)
+    local paint = offline.paint
+    local row = paint.rows[y] or {}
+    paint.rows[y] = row
+    row[x] = paint.palette[paint.color] and paint.color or nil
+    paint.rebuildRow(y)
+end
+
+function offline.paint.fill(x, y)
+    local paint = offline.paint
+    local target = (paint.rows[y] or {})[x]
+    local replacement = paint.palette[paint.color] and paint.color or nil
+    if target == replacement then return end
+
+    local queue, changed = {}, {}
+    local function visit(column, rowIndex)
+        local row = paint.rows[rowIndex]
+        if (row and row[column] or nil) ~= target then return end
+        if not row then
+            row = {}
+            paint.rows[rowIndex] = row
+        end
+        row[column] = replacement
+        changed[rowIndex] = true
+        queue[#queue + 1] = (rowIndex - 1) * 50 + column - 1
+    end
+
+    visit(x, y)
+    local head = 1
+    while head <= #queue do
+        local index = queue[head]
+        local column, rowIndex = index % 50 + 1, math.floor(index / 50) + 1
+        if column > 1 then visit(column - 1, rowIndex) end
+        if column < 50 then visit(column + 1, rowIndex) end
+        if rowIndex > 1 then visit(column, rowIndex - 1) end
+        if rowIndex < 50 then visit(column, rowIndex + 1) end
+        head = head + 1
+    end
+    for rowIndex in pairs(changed) do paint.rebuildRow(rowIndex) end
+end
+
+function offline.paint.apply()
+    local paint = offline.paint
+    if paint.bucket then paint.fill(paint.x, paint.y)
+    else paint.pixel(paint.x, paint.y) end
+end
+
+function offline.paint.colorIndex(byte)
+    if byte >= 65 and byte <= 90 then return byte - 56 end
+    if byte >= 48 and byte <= 56 then return byte - 48 end
+    return -1
+end
+
+function offline.paint.scrollPalette(delta)
+    local paint = offline.paint
+    paint.paletteTop = math.max(1, math.min(#paint.palette - 6, paint.paletteTop + delta))
+end
+
+function offline.paint.encode()
+    local cells = {}
+    for y = 1, 50 do
+        local row = offline.paint.rows[y] or {}
+        for x = 1, 50 do
+            local index = row[x] or 0
+            cells[#cells + 1] = string.char(index <= 8 and index + 48 or index + 56)
+        end
+    end
+    return table.concat(cells)
+end
+
+function offline.paint.decode(data)
+    if type(data) ~= "string" or #data ~= 2500 then return false end
+    local rows, runs = {}, {}
+    for y = 1, 50 do
+        local row, spans, previous = {}, {}, 0
+        for x = 1, 50 do
+            local color = offline.paint.colorIndex(data:byte((y - 1) * 50 + x))
+            if color < 0 or color > #offline.paint.palette then return false end
+            if color > 0 then
+                row[x] = color
+                if color == previous then spans[#spans][2] = spans[#spans][2] + 1
+                else spans[#spans + 1] = {x, 1, color} end
+            end
+            previous = color
+        end
+        rows[y], runs[y] = row, spans
+    end
+    return rows, runs
+end
+
+function offline.paint.action(action)
+    local paint = offline.paint
+    local path = paint.slot == 1 and "maxwellos_painting.txt" or ("maxwellos_painting_" .. paint.slot .. ".txt")
+    if action == "slot" then
+        paint.slot = paint.slot % 5 + 1
+        paint.message = "Selected save slot " .. paint.slot .. "."
+        return
+    end
+    if action == "save" then
+        local ok = file and file.write and pcall(file.write, path, paint.encode())
+        paint.message = ok and "Saved to slot " .. paint.slot .. "." or "Could not save painting."
+    elseif action == "load" then
+        local ok, data
+        if file and file.read then ok, data = pcall(file.read, path) end
+        local rows, runs = paint.decode(ok and data)
+        if rows then paint.rows, paint.runs = rows, runs end
+        paint.message = rows and "Loaded slot " .. paint.slot .. "." or ("No readable painting in slot " .. paint.slot .. ".")
+    end
+end
+
+function offline.paint.openMenu(mode)
+    local paint = offline.paint
+    paint.menu, paint.slots = mode, {}
+    for i = 1, 5 do
+        local path = i == 1 and "maxwellos_painting.txt" or ("maxwellos_painting_" .. i .. ".txt")
+        local ok, data
+        if file and file.read then ok, data = pcall(file.read, path) end
+        paint.slots[i] = not ok and "Unavailable" or (not data and "Empty"
+            or (paint.decode(data) and "Saved painting" or "Unreadable"))
+    end
+end
+
+function offline.paint.confirm()
+    local paint = offline.paint
+    local mode = paint.menu
+    paint.menu = nil
+    paint.action(mode)
+end
+
+function offline.paint.click(x, y)
+    local paint = offline.paint
+    if paint.menu then
+        if x >= 62 and x < 450 and y >= 137 and y < 382 then
+            paint.slot = math.floor((y - 137) / 49) + 1
+        elseif x >= 62 and x < 245 and y >= 402 and y < 447 then paint.confirm()
+        elseif x >= 264 and x < 450 and y >= 402 and y < 447 then paint.menu = nil end
+        return
+    end
+    if x >= 16 and x < 50 and y >= 340 and y < 384 then
+        paint.bucket, paint.pen, paint.message = not paint.bucket, false, nil
+    elseif x >= 56 and x < 456 and y >= 78 and y < 478 then
+        paint.x, paint.y = math.floor((x - 56) / 8) + 1, math.floor((y - 78) / 8) + 1
+        paint.apply()
+    elseif x >= 466 and x < 496 and y >= 78 and y < 365 then
+        if y < 101 then paint.scrollPalette(-1)
+        elseif y >= 343 then paint.scrollPalette(1)
+        elseif y >= 108 and y < 108 + 7 * 32 then
+            paint.color = paint.paletteTop + math.floor((y - 108) / 32)
+        elseif y >= 332 then paint.color = 0 end
+    elseif x >= 466 and x < 496 and y >= 365 and y < 449 then
+        local action = ({"slot", "save", "load"})[math.floor((y - 365) / 28) + 1]
+        if action == "save" or action == "load" then paint.openMenu(action)
+        else paint.action(action) end
+    end
+end
+
+function offline.paint.key(key, enter)
+    local paint = offline.paint
+    if paint.menu then
+        if key == 17 then paint.slot = math.max(1, paint.slot - 1)
+        elseif key == 18 then paint.slot = math.min(5, paint.slot + 1)
+        elseif key >= 49 and key <= 53 then paint.slot = key - 48
+        elseif enter then paint.confirm()
+        elseif key == 8 or key == 127 then paint.menu = nil end
+        return
+    end
+    if key == 86 or key == 118 then paint.action("slot")
+    elseif key == 83 or key == 115 then paint.openMenu("save")
+    elseif key == 76 or key == 108 then paint.openMenu("load")
+
+    elseif key == 151 then paint.scrollPalette(-7)
+    elseif key == 152 then paint.scrollPalette(7)
+    elseif key >= 49 and key <= 55 then paint.color = paint.paletteTop + key - 49
+    elseif key == 57 then paint.color = 0
+    elseif enter or key == 32 then paint.apply()
+    elseif key == 70 or key == 102 then
+        paint.bucket, paint.pen, paint.message = not paint.bucket, false, nil
+    elseif key == 17 or key == 18 or key == 19 or key == 20 then
+        if key == 17 then paint.y = math.max(1, paint.y - 1)
+        elseif key == 18 then paint.y = math.min(50, paint.y + 1)
+        elseif key == 19 then paint.x = math.max(1, paint.x - 1)
+        else paint.x = math.min(50, paint.x + 1) end
+        if paint.pen then paint.pixel(paint.x, paint.y) end
+    elseif key == 66 or key == 98 then
+        paint.bucket = false
+        paint.pen = not paint.pen
+        if paint.pen then paint.pixel(paint.x, paint.y) end
+    end
+end
+
+function offline.paint.draw()
+    local paint = offline.paint
+    if paint.menu then
+        local saving = paint.menu == "save"
+        label(62, 88, saving and "Save painting" or "Load painting", ink, titleFont)
+        for i = 1, 5 do
+            local y = 137 + (i - 1) * 49
+            render.setColor(panel)
+            render.drawRect(62, y, 388, 43)
+            label(75, y + 11, "Slot " .. i, i == paint.slot and accent or ink)
+            label(275, y + 12, paint.slots[i], muted, smallFont)
+        end
+        render.setColor(panel)
+        render.drawRect(62, 402, 183, 45)
+        render.drawRect(264, 402, 186, 45)
+        label(74, 415, saving and "Save to slot" or "Load slot", accent)
+        label(276, 415, "Cancel", ink)
+        label(22, 483, "Up/Down or 1-5 selects | Enter confirms | Backspace cancels", muted, smallFont)
+        return
+    end
+    render.setColor(paint.palette[8])
+    render.drawRect(56, 78, 400, 400)
+    for y, runs in pairs(paint.runs) do
+        for _, run in ipairs(runs) do
+            render.setColor(paint.palette[run[3]])
+            render.drawRect(56 + (run[1] - 1) * 8, 78 + (y - 1) * 8, run[2] * 8, 8)
+        end
+    end
+    render.setColor(Color(255, 90, 130))
+    render.drawRectOutline(55 + (paint.x - 1) * 8, 77 + (paint.y - 1) * 8, 10, 10)
+    label(474, 80, "^", accent, smallFont)
+    for i = 1, 7 do
+        local index = paint.paletteTop + i - 1
+        local y = 108 + (i - 1) * 32
+        render.setColor(paint.palette[index])
+        render.drawRect(466, y, 30, 26)
+        if index == paint.color then
+            render.setColor(accent)
+            render.drawRectOutline(465, y - 1, 32, 28)
+        end
+    end
+    label(468, 328, paint.color == 0 and "E*" or "E", accent, smallFont)
+    label(474, 344, "v", accent, smallFont)
+    for i, text in ipairs({tostring(paint.slot), "S", "L"}) do
+        render.setColor(panel)
+        render.drawRect(466, 365 + (i - 1) * 28, 30, 24)
+        label(475, 369 + (i - 1) * 28, text, accent, smallFont)
+    end
+    render.setColor(panel)
+    render.setColor(paint.bucket and accent or panel)
+    render.drawRect(16, 340, 34, 44)
+    label(21, 352, "Fill", paint.bucket and background or ink, smallFont)
+    label(22, 486, paint.message or "PgUp/PgDn palette | F fill | Space applies | 9 erases", muted, smallFont)
+end
+
+calculator.functions = {
+    sqrt = math.sqrt, ["x^2"] = function(x) return x * x end,
+    log = function(x) return math.log(x) / math.log(10) end, ln = math.log,
+    ["%"] = function(x) return x / 100 end, ["+/-"] = function(x) return -x end,
+    ["1/x"] = function(x) return 1 / x end,
+    sin = math.sin, cos = math.cos, tan = math.tan
+}
+
 local function calculatorInput(key)
     local state = calculator
+    if state.error and key == "=" then return end
     if key == "C" then
         state.entry, state.left, state.operator, state.error, state.result = "", nil, nil, nil, false
     elseif key == "Backspace" then
@@ -198,7 +632,29 @@ local function calculatorInput(key)
             if key == "." and (state.entry == "" or state.entry == "-") then state.entry = state.entry .. "0" end
             state.entry = state.entry .. key
         end
-    elseif key == "+" or key == "-" or key == "*" or key == "/" or key == "=" then
+    elseif key == "Angle" then
+        state.radians = not state.radians
+    elseif key == "pi" or key == "e" then
+        state.entry = string.format("%.15g", key == "pi" and math.pi or math.exp(1))
+        state.error, state.result = nil, not state.operator
+    elseif state.functions[key] then
+        local number = tonumber(state.entry)
+        if not number then return end
+        if key == "sin" or key == "cos" or key == "tan" then
+            if not state.radians then number = number * math.pi / 180 end
+            if key == "tan" and math.abs(math.cos(number)) < 1e-12 then
+                state.error = "Tangent is undefined."
+                return
+            end
+        end
+        local result = state.functions[key](number)
+        if result ~= result or math.abs(result) == math.huge then
+            state.error = "Undefined or out of range."
+        else
+            state.entry = string.format("%.15g", result)
+            state.error, state.result = nil, true
+        end
+    elseif key == "+" or key == "-" or key == "*" or key == "/" or key == "^" or key == "=" then
         local number = tonumber(state.entry)
         if not number then
             if key == "-" and state.entry == "" and not state.error then state.entry = "-"
@@ -213,6 +669,7 @@ local function calculatorInput(key)
             if state.operator == "+" then number = state.left + number
             elseif state.operator == "-" then number = state.left - number
             elseif state.operator == "*" then number = state.left * number
+            elseif state.operator == "^" then number = state.left ^ number
             else number = state.left / number end
         end
         if number ~= number or math.abs(number) == math.huge then
@@ -244,9 +701,9 @@ local function calculatorClick(x, y)
     end
     if y >= 146 and y < 177 and x >= 369 then
         calculatorInput("C")
-    elseif y >= 184 and y < 408 then
-        local col, row = math.floor((x - 16) / 120), math.floor((y - 184) / 56)
-        if (x - 16) % 120 < 113 and (y - 184) % 56 < 49 then calculatorInput(CALCULATOR_KEYS[row * 4 + col + 1]) end
+    elseif x >= 16 and x < 496 and y >= 180 and y < 415 then
+        local col, row = math.floor((x - 16) / 80), math.floor((y - 180) / 47)
+        if (x - 16) % 80 < 74 and (y - 180) % 47 < 41 then calculatorInput(CALCULATOR_KEYS[row * 6 + col + 1]) end
     end
     return true
 end
@@ -538,17 +995,19 @@ local function renderCalculator()
     label(26, 100, state.error or value, state.error and alertColor or ink)
     label(380, 151, "Clear  C", accent, smallFont)
     for i, key in ipairs(CALCULATOR_KEYS) do
-        local x, y = 16 + (i - 1) % 4 * 120, 184 + math.floor((i - 1) / 4) * 56
+        local x, y = 16 + (i - 1) % 6 * 80, 180 + math.floor((i - 1) / 6) * 47
         render.setColor(panel)
-        render.drawRect(x, y, 113, 49)
-        label(x + 48, y + 12, key, key == "=" and accent or ink)
+        render.drawRect(x, y, 74, 41)
+        local text = key == "Angle" and (state.radians and "RAD" or "DEG") or key
+        label(x + 12, y + 11, text, key == "=" and accent or ink)
     end
     render.setColor(panel)
     render.drawRect(369, 426, 127, 44)
     label(381, 438, "Desktop  F1", accent, smallFont)
-    label(22, 483, "Press E on buttons or use the Wiremod Keyboard.", muted, smallFont)
+    local hint = calculator.streamGreeting and "Calc (short for calculator for anyone new to the stream)"
+        or "Press E on buttons or use the Wiremod Keyboard."
+    label(22, 483, hint, muted, smallFont)
 end
-
 
 local function handleKey(key)
     local enter = key == 10 or key == 13 or key == 142
@@ -558,6 +1017,10 @@ local function handleKey(key)
         elseif enter then applyTheme() end
     elseif key == 163 then
         toggleDesktop()
+    elseif gameTab == "paint" then
+        offline.paint.key(key, enter)
+    elseif gameTab == "squadron" then
+        offline.squadron.key(key, enter)
     elseif gameTab == "calculator" then
         calculatorKey(key, enter)
     elseif gameTab == "mines" then
@@ -567,6 +1030,10 @@ local function handleKey(key)
         if key == 19 then selectMenuTab(APPS)
         elseif key == 20 then selectMenuTab(GAMES)
         elseif key == 18 or enter then selectedGame = 1 end
+    elseif key == 19 then
+        selectedGame = 1
+    elseif key == 20 then
+        selectedGame = #menuOptions
     elseif key == 17 then
         selectedGame = 0
     elseif enter then
@@ -589,6 +1056,11 @@ net.receive("demo_keys", function()
 end)
 
 hook.add("think", "demo_minesweeper", function()
+    if poweredOn and gameTab == "squadron" and timer.curtime() >= startupUntil then
+        offline.squadron.update(timer.curtime())
+    else
+        offline.squadron.lastTick = nil
+    end
     if poweredOn and gameTab == "mines" and mineSearch and not mineSearch() then mineSearch = nil end
 end)
 
@@ -604,6 +1076,10 @@ hook.add("StarfallUsed", "demo_controls", function(user, screen)
         elseif y >= 419 and y < 466 then applyTheme() end
     elseif x >= 369 and y >= 8 and y < 39 then
         toggleDesktop()
+    elseif gameTab == "paint" then
+        offline.paint.click(x, y)
+    elseif gameTab == "squadron" then
+        offline.squadron.key(13, true)
     elseif gameTab == "calculator" then
         calculatorClick(x, y)
     elseif gameTab == "mines" then
@@ -619,8 +1095,8 @@ hook.add("StarfallUsed", "demo_controls", function(user, screen)
     elseif y >= 82 and y < 114 then
         if x < 248 then selectMenuTab(APPS)
         elseif x >= 264 then selectMenuTab(GAMES) end
-    elseif x < 248 and y >= LAUNCHER_TOP and y < LAUNCHER_TOP + TILE_HEIGHT then
-        selectedGame = 1
+    elseif (x < 248 or x >= 264) and y >= LAUNCHER_TOP and y < LAUNCHER_TOP + TILE_HEIGHT then
+        selectedGame = x < 248 and 1 or 2
         openApp()
     end
 end)
@@ -630,17 +1106,22 @@ local function renderDesktop()
     render.drawRect(16, 82, TILE_WIDTH, 32)
     render.drawRect(264, 82, TILE_WIDTH, 32)
     render.drawRect(16, LAUNCHER_TOP, TILE_WIDTH, TILE_HEIGHT)
+    render.drawRect(264, LAUNCHER_TOP, TILE_WIDTH, TILE_HEIGHT)
     render.setColor(accent)
     if selectedGame == 0 then
         render.drawRect(menuOptions == APPS and 16 or 264, 111, TILE_WIDTH, 3)
     else
-        render.drawRect(16, LAUNCHER_TOP, 4, TILE_HEIGHT)
+        render.drawRect(selectedGame == 1 and 16 or 264, LAUNCHER_TOP, 4, TILE_HEIGHT)
     end
     label(28, 89, "Apps", menuOptions == APPS and accent or muted)
     label(276, 89, "Games", menuOptions == GAMES and accent or muted)
-    local app = menuOptions[1]
-    label(30, LAUNCHER_TOP + 16, app.name, selectedGame == 1 and accent or ink)
-    label(30, LAUNCHER_TOP + 48, app.detail, muted, smallFont)
+    for i, app in ipairs(menuOptions) do
+        local x = i == 1 and 30 or 278
+        label(x, LAUNCHER_TOP + 16, app.name, selectedGame == i and accent or ink)
+        label(x, LAUNCHER_TOP + 48, app.detail, muted, smallFont)
+    end
+    label(22, 418, "For full version visit", ink, smallFont)
+    label(22, 440, "https://github.com/Mooseyboi30/MaxwellOS", accent, smallFont)
     label(22, 483, "Aim and press E, or use arrows and Enter.", muted, smallFont)
 end
 
@@ -670,6 +1151,8 @@ hook.add("render", "demo_screen", function()
     render.drawRect(0, 0, 512, 72)
     if not themeConfigured then renderThemeSetup(); return end
     local title = gameTab == "calculator" and "Calculator" or (gameTab == "mines" and "Minesweeper" or "Computer Demo")
+    if gameTab == "paint" then title = "Paint"
+    elseif gameTab == "squadron" then title = "Star Squadron" end
     label(22, 10, title, ink, titleFont)
     label(22, 46, "Offline demo", muted, smallFont)
     if gameTab ~= "menu" or lastApp then
@@ -678,6 +1161,8 @@ hook.add("render", "demo_screen", function()
         label(380, 15, gameTab == "menu" and "F1 Last app" or "F1 Desktop", accent, smallFont)
     end
     if gameTab == "calculator" then renderCalculator()
+    elseif gameTab == "paint" then offline.paint.draw()
+    elseif gameTab == "squadron" then offline.squadron.draw()
     elseif gameTab == "mines" then renderMines()
     else renderDesktop() end
 end)

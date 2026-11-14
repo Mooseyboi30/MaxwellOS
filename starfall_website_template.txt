@@ -10,8 +10,8 @@ local OPTIONS = {512, buttons = {
 }}
 local clicks = 0
 local actions = {
-    increment = function() clicks = clicks + 1 end,
-    reset = function() clicks = 0 end
+    increment = function() clicks = clicks + 1; return "click" end,
+    reset = function() clicks = 0; return "success" end
 }
 
 hook.add("remote", "maxwellos_website_template", function(_, user, protocol, action)
@@ -33,6 +33,6 @@ hook.add("remote", "maxwellos_website_template", function(_, user, protocol, act
         }
     elseif protocol == "starfall_website_button_v1" and user and user:isValid() then
         local handler = actions[action]
-        if handler then handler() end
+        if handler then return handler() end
     end
 end)

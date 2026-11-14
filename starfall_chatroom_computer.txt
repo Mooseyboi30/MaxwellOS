@@ -1,10 +1,13 @@
 --@name Chatroom Computer
---@author v35.7
+--@author v36.0
 --@shared
 
-local CHIP_VERSION = "35.7"
+local CHIP_VERSION = "36.0"
 -- Get matching chip versions at https://github.com/Mooseyboi30/MaxwellOS
 local CHANGELOG = {
+    {"v36.0", "Added a five-slot save and load menu to Paint."},
+    {"v35.9", "Added scrolling to the desktop app and game lists."},
+    {"v35.8", "MaxwellNET buttons can play built-in sound cues at the viewer screen."},
     {"v35.7", "Pong paddles follow the crosshair on linked screens."},
     {"v35.6", "Website Viewer supports up to 64 site-defined buttons with Lua action handlers."},
     {"v33.5", "Added an occasional Calculator greeting."},
@@ -653,7 +656,15 @@ net.receive("room_website_button", function(_, ply)
     if #action > 40 or action == "" then return end
     for _, button in ipairs(requestedWebsiteButtons) do
         if button[6] == action then
-            pcall(hook.runRemote, site, "starfall_website_button_v1", action)
+            local ok, replies = pcall(hook.runRemote, site, "starfall_website_button_v1", action)
+            local cue = ok and type(replies) == "table" and type(replies[1]) == "table" and replies[1][1]
+            local cues = {click = 1, success = 2, error = 3, splash = 4, chime = 5}
+            if type(cue) == "string" and cues[cue] and net.getBytesLeft() >= 32 then
+                net.start("room_website_sound")
+                net.writeUInt(id, 16)
+                net.writeUInt(cues[cue], 3)
+                net.send(ply)
+            end
             return
         end
     end
@@ -1189,9 +1200,21 @@ local APPS = {
 local menuOptions = APPS
 local LAUNCHER_TOP, TILE_WIDTH, TILE_HEIGHT, TILE_GAP = 132, 232, 68, 16
 
+function PHONE.desktopScroll(delta, follow)
+    local top = PHONE.desktopTop or 0
+    local maxTop = math.max(0, math.ceil(#menuOptions / 2) - 4)
+    if follow and selectedGame > 0 then
+        local row = math.floor((selectedGame - 1) / 2)
+        top = math.max(row - 3, math.min(top, row))
+    else
+        top = top + delta
+    end
+    PHONE.desktopTop = math.max(0, math.min(maxTop, top))
+end
+
 local function selectMenuTab(options)
     if menuOptions == options then return end
-    menuOptions, selectedGame = options, 0
+    menuOptions, selectedGame, PHONE.desktopTop = options, 0, 0
 end
 local trailChoice = 1
 local MULTIPLAYER_TABS = {tic = 0, chess = 1, battleship = 2, trail = 3, pong = 4}
@@ -1737,8 +1760,34 @@ function PHONE.paint.action(action)
     end
 end
 
+function PHONE.paint.openMenu(mode)
+    local paint = PHONE.paint
+    paint.menu, paint.slots = mode, {}
+    for i = 1, 5 do
+        local path = i == 1 and "maxwellos_painting.txt" or ("maxwellos_painting_" .. i .. ".txt")
+        local ok, data
+        if file and file.read then ok, data = pcall(file.read, path) end
+        paint.slots[i] = not ok and "Unavailable" or (not data and "Empty"
+            or (paint.decode(data) and "Saved painting" or "Unreadable"))
+    end
+end
+
+function PHONE.paint.confirm()
+    local paint = PHONE.paint
+    local mode = paint.menu
+    paint.menu = nil
+    paint.action(mode)
+end
+
 function PHONE.paint.click(x, y)
     local paint = PHONE.paint
+    if paint.menu then
+        if x >= 62 and x < 450 and y >= 137 and y < 382 then
+            paint.slot = math.floor((y - 137) / 49) + 1
+        elseif x >= 62 and x < 245 and y >= 402 and y < 447 then paint.confirm()
+        elseif x >= 264 and x < 450 and y >= 402 and y < 447 then paint.menu = nil end
+        return
+    end
     if x >= 16 and x < 50 and y >= 340 and y < 384 then
         paint.bucket, paint.pen, paint.message = not paint.bucket, false, nil
     elseif x >= 16 and x < 50 and y >= 395 and y < 455 then
@@ -1753,16 +1802,26 @@ function PHONE.paint.click(x, y)
             paint.color = paint.paletteTop + math.floor((y - 108) / 32)
         elseif y >= 332 then paint.color = 0 end
     elseif x >= 466 and x < 496 and y >= 365 and y < 477 then
-        paint.action(({"slot", "save", "load", "send"})[math.floor((y - 365) / 28) + 1])
+        local action = ({"slot", "save", "load", "send"})[math.floor((y - 365) / 28) + 1]
+        if action == "save" or action == "load" then paint.openMenu(action)
+        else paint.action(action) end
     end
 end
 
 function PHONE.paint.key(key, enter)
     local paint = PHONE.paint
+    if paint.menu then
+        if key == 17 then paint.slot = math.max(1, paint.slot - 1)
+        elseif key == 18 then paint.slot = math.min(5, paint.slot + 1)
+        elseif key >= 49 and key <= 53 then paint.slot = key - 48
+        elseif enter then paint.confirm()
+        elseif key == 8 or key == 127 then paint.menu = nil end
+        return
+    end
     if key == 71 or key == 103 then paint.action("sendSlot")
     elseif key == 86 or key == 118 then paint.action("slot")
-    elseif key == 83 or key == 115 then paint.action("save")
-    elseif key == 76 or key == 108 then paint.action("load")
+    elseif key == 83 or key == 115 then paint.openMenu("save")
+    elseif key == 76 or key == 108 then paint.openMenu("load")
     elseif key == 84 or key == 116 then paint.action("send")
     elseif key == 151 then paint.scrollPalette(-7)
     elseif key == 152 then paint.scrollPalette(7)
@@ -1786,6 +1845,24 @@ end
 
 function PHONE.paint.draw()
     local paint = PHONE.paint
+    if paint.menu then
+        local saving = paint.menu == "save"
+        label(62, 88, saving and "Save painting" or "Load painting", ink, titleFont)
+        for i = 1, 5 do
+            local y = 137 + (i - 1) * 49
+            render.setColor(panel)
+            render.drawRect(62, y, 388, 43)
+            label(75, y + 11, "Slot " .. i, i == paint.slot and accent or ink)
+            label(275, y + 12, paint.slots[i], muted, smallFont)
+        end
+        render.setColor(panel)
+        render.drawRect(62, 402, 183, 45)
+        render.drawRect(264, 402, 186, 45)
+        label(74, 415, saving and "Save to slot" or "Load slot", accent)
+        label(276, 415, "Cancel", ink)
+        label(22, 483, "Up/Down or 1-5 selects | Enter confirms | Backspace cancels", muted, smallFont)
+        return
+    end
     render.setColor(paint.palette[8])
     render.drawRect(56, 78, 400, 400)
     for y, runs in pairs(paint.runs) do
@@ -2470,6 +2547,28 @@ if isOwner then
         refreshWebsite()
     end
 
+    net.receive("room_website_sound", function()
+        local id, cue = net.readUInt(16), net.readUInt(3)
+        local page = websitePages[selectedWebsite]
+        if not poweredOn or gameTab ~= "website" or not page or page.id ~= id then return end
+        local sounds = {"buttons/button15.wav", "buttons/button9.wav", "buttons/button10.wav",
+            "ambient/water/water_splash1.wav", "buttons/button17.wav"}
+        if not sounds[cue] then return end
+        pcall(function()
+            local position = eyePos()
+            local source = websiteControls.soundScreen
+            if not PHONE.open then
+                if not source or not source:isValid() then
+                    for _, component in ipairs(chip():getLinkedComponents()) do
+                        if component:getClass() == "starfall_screen" then source = component; break end
+                    end
+                end
+                if source and source:isValid() then position = source:getPos() end
+            end
+            if sound and sound.emitSound then sound.emitSound(sounds[cue], position, 65, 100, 0.45) end
+        end)
+    end)
+
     net.receive("room_website_frame", function()
         local id = net.readUInt(16)
         local page = websitePages[selectedWebsite]
@@ -2688,8 +2787,12 @@ if isOwner then
                     end
                     local dx, dy = x - 16, y - LAUNCHER_TOP
                     local stepX, stepY = TILE_WIDTH + TILE_GAP, TILE_HEIGHT + TILE_GAP
-                    if dy >= 0 and dx % stepX < TILE_WIDTH and dy % stepY < TILE_HEIGHT then
-                        local index = math.floor(dy / stepY) * 2 + math.floor(dx / stepX) + 1
+                    if y >= 464 and y < 481 and #menuOptions > 8 then
+                        PHONE.desktopScroll(x < 256 and -1 or 1)
+                        return
+                    end
+                    if dy >= 0 and dy < 4 * stepY and y < 464 and dx % stepX < TILE_WIDTH and dy % stepY < TILE_HEIGHT then
+                        local index = (math.floor(dy / stepY) + (PHONE.desktopTop or 0)) * 2 + math.floor(dx / stepX) + 1
                         if menuOptions[index] then
                             selectedGame = index
                             playChatSound("game")
@@ -2707,6 +2810,7 @@ if isOwner then
     hook.add("StarfallUsed", "chatroom_theme", function(user, screen)
         if user ~= player() or not screen or not screen:isValid()
             or screen:getClass() ~= "starfall_screen" then return end
+        websiteControls.soundScreen = screen
         PHONE.computerClickAt(render.cursorPos(user, screen))
     end)
 
@@ -3044,7 +3148,9 @@ if isOwner then
             return
         end
         if gameTab == "menu" then
-            if selectedGame == 0 then
+            if key == 151 or key == 152 then
+                selectedGame = math.max(1, math.min(#menuOptions, selectedGame + (key == 151 and -8 or 8)))
+            elseif selectedGame == 0 then
                 if key == 19 then selectMenuTab(APPS)
                 elseif key == 20 then selectMenuTab(GAMES)
                 elseif key == 18 or enter then selectedGame = 1 end
@@ -3053,6 +3159,7 @@ if isOwner then
             elseif key == 17 then selectedGame = math.max(0, selectedGame - 2)
             elseif key == 18 and menuOptions[selectedGame + 2] then selectedGame = selectedGame + 2
             elseif enter then enterSelectedGame() end
+            PHONE.desktopScroll(0, true)
             return
         end
         if gameTab == "squadron" then PHONE.squadron.key(key, enter); return end
@@ -3452,8 +3559,10 @@ local function renderGameMenu()
     end
     label(28, 89, "Apps", menuOptions == APPS and accent or muted)
     label(276, 89, "Games", menuOptions == GAMES and accent or muted)
-    for i, entry in ipairs(menuOptions) do
-        local slot = i - 1
+    local first = (PHONE.desktopTop or 0) * 2
+    for i = first + 1, math.min(first + 8, #menuOptions) do
+        local entry = menuOptions[i]
+        local slot = i - first - 1
         local x = 16 + slot % 2 * (TILE_WIDTH + TILE_GAP)
         local y = LAUNCHER_TOP + math.floor(slot / 2) * (TILE_HEIGHT + TILE_GAP)
         local needsRoom = room == "" and (MULTIPLAYER_TABS[entry.tab] or entry.needsRoom)
@@ -3469,7 +3578,11 @@ local function renderGameMenu()
         label(x + 14, y + 16, entry.name, locked and muted or (selected and accent or ink))
         label(x + 14, y + 48, needsRoom and "Join a room to use" or (otherMatch and "Already in another match" or entry.detail), muted, smallFont)
     end
-    label(22, 484, "Up to tabs  |  Left/Right switches  |  Down to tiles", muted, smallFont)
+    if #menuOptions > 8 then
+        label(22, 464, " < Scroll up", accent, smallFont)
+        label(378, 464, "Scroll down >", accent, smallFont)
+    end
+    label(22, 484, "Up to tabs  |  PgUp/PgDn scrolls  |  Enter opens", muted, smallFont)
 end
 
 local function renderMines()
