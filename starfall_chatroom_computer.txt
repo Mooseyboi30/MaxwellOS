@@ -1,10 +1,12 @@
 --@name Chatroom Computer
---@author v37.2
+--@author v37.5
 --@shared
 
-local CHIP_VERSION = "37.2"
+local CHIP_VERSION = "37.5"
 -- Get matching chip versions at https://github.com/Mooseyboi30/MaxwellOS
 local CHANGELOG = {
+    {"v37.5", "Added electr0n's Steam profile to Credits."},
+    {"v37.4", "Expanded the scrollable HL2 Music Player with tracks from Half-Life 2 and both episodes."},
     {"v37.2", "Placed Settings and Credits side by side at the bottom of Apps."},
     {"v37.1", "Added project Credits and an HL2 Music Player."},
     {"v36.1", "MaxwellNET supports timed website sound cues, including Plinko drops and payouts."},
@@ -2173,16 +2175,56 @@ end
 PHONE.extras = {
     credits = {
         {"Project creator", "Turkey eating maxwell the cat", "https://steamcommunity.com/id/Maxwellthecatfromgmod/"},
-        {"Contributor", "electr0n"},
+        {"Contributor", "electr0n", "https://steamcommunity.com/id/notanotherminge"},
         {"Special thanks", "izkrenada", "https://steamcommunity.com/id/izkrenofficialuser"},
         {"Source and downloads", "GitHub", "https://github.com/Mooseyboi30/MaxwellOS"}
     },
     music = {
-        {"Hazardous Environments", "HL2_song1.mp3"},
-        {"CP Violation", "HL2_song4.mp3"},
+        {"CP Violation", "HL2_song20_submix0.mp3"},
         {"Triage at Dawn", "HL2_song23_SuitSong3.mp3"},
-        {"Apprehension and Evasion", "HL2_song17.mp3"}
+        {"Apprehension and Evasion", "HL2_song29.mp3"},
+        {"Particle Ghost", "HL2_song1.mp3"},
+        {"The Innsbruck Experiment", "HL2_song4.mp3"},
+        {"Broken Symmetry", "HL2_song17.mp3"},
+        {"Brane Scan", "HL2_song31.mp3"},
+        {"Dark Energy", "HL2_song3.mp3"},
+        {"Pulse Phase", "HL2_song6.mp3"},
+        {"Ravenholm Reprise", "HL2_song7.mp3"},
+        {"Probably Not a Problem", "HL2_song33.mp3"},
+        {"Calabi-Yau Model", "HL2_song30.mp3"},
+        {"Slow Light", "HL2_song32.mp3"},
+        {"Our Resurrected Teleport", "HL2_song26.mp3"},
+        {"Lab Practicum", "HL2_song2.mp3"},
+        {"Nova Prospekt", "HL2_song19.mp3"},
+        {"LG Orbifold", "HL2_song16.mp3"},
+        {"Kaon", "HL2_song15.mp3"},
+        {"You're Not Supposed to Be Here", "HL2_song14.mp3"},
+        {"Suppression Field", "HL2_song13.mp3"},
+        {"Eine Kleiner Elevatormuzik", "VLVX_song1.mp3", "Episode One"},
+        {"Combine Advisory", "VLVX_song2.mp3", "Episode One"},
+        {"Guard Down", "VLVX_song4.mp3", "Episode One"},
+        {"Darkness at Noon", "VLVX_song8.mp3", "Episode One"},
+        {"Disrupted Original", "VLVX_song11.mp3", "Episode One"},
+        {"Self Destruction", "VLVX_song12.mp3", "Episode One"},
+        {"What Kind of Hospital Is This?", "VLVX_song18.mp3", "Episode One"},
+        {"Infraradiant", "VLVX_song19a.mp3", "Episode One"},
+        {"Decay Mode", "VLVX_song19b.mp3", "Episode One"},
+        {"Penultimatum", "VLVX_song21.mp3", "Episode One"},
+        {"No One Rides for Free", "VLVX_song0.mp3", "Episode Two"},
+        {"Dark Interval", "VLVX_song3.mp3", "Episode Two"},
+        {"Crawl Yard", "VLVX_song9.mp3", "Episode Two"},
+        {"Nectarium", "VLVX_song15.mp3", "Episode Two"},
+        {"Extinction Event Horizon", "VLVX_song20.mp3", "Episode Two"},
+        {"Vortal Combat", "VLVX_song22.mp3", "Episode Two"},
+        {"Sector Sweep", "VLVX_song23.mp3", "Episode Two"},
+        {"Shu'ulathoi", "VLVX_song23ambient.mp3", "Episode Two"},
+        {"Last Legs", "VLVX_song24.mp3", "Episode Two"},
+        {"Abandoned in Place", "VLVX_song25.mp3", "Episode Two"},
+        {"Inhuman Frequency", "VLVX_song26.mp3", "Episode Two"},
+        {"Hunting Party", "VLVX_song27.mp3", "Episode Two"},
+        {"Eon Trap", "VLVX_song28.mp3", "Episode Two"}
     },
+    musicTop = 1,
     selected = {credits = 1, music = 1}
 }
 
@@ -2217,19 +2259,38 @@ function PHONE.extras.activate(tab)
     end
 end
 
+function PHONE.extras.moveMusic(delta)
+    local extras = PHONE.extras
+    local index = math.max(1, math.min(#extras.music, extras.selected.music + delta))
+    extras.selected.music = index
+    extras.musicTop = math.max(index - 3, math.min(index, extras.musicTop))
+end
+
 function PHONE.extras.key(tab, key, enter)
     local extras = PHONE.extras
     if enter then extras.activate(tab)
+    elseif tab == "music" then
+        if key == 17 then extras.moveMusic(-1)
+        elseif key == 18 then extras.moveMusic(1)
+        elseif key == 151 then extras.moveMusic(-4)
+        elseif key == 152 then extras.moveMusic(4)
+        elseif key == 32 then extras.stop() end
     elseif key == 17 then extras.selected[tab] = math.max(1, extras.selected[tab] - 1)
-    elseif key == 18 then extras.selected[tab] = math.min(#extras[tab], extras.selected[tab] + 1)
-    elseif tab == "music" and key == 32 then extras.stop() end
+    elseif key == 18 then extras.selected[tab] = math.min(#extras[tab], extras.selected[tab] + 1) end
 end
 
 function PHONE.extras.click(tab, x, y)
     local extras = PHONE.extras
-    if tab == "music" and y >= 400 and y < 446 then extras.stop(); return end
-    local index = math.floor((y - 94) / 75) + 1
-    if extras[tab][index] and (y - 94) % 75 < 64 then
+    if tab == "music" and y >= 400 and y < 446 then
+        if x < 170 then extras.stop()
+        elseif x < 333 then extras.moveMusic(-4)
+        else extras.moveMusic(4) end
+        return
+    end
+    if y < 94 or y >= 394 or (y - 94) % 75 >= 64 then return end
+    local first = tab == "music" and extras.musicTop or 1
+    local index = first + math.floor((y - 94) / 75)
+    if extras[tab][index] then
         extras.selected[tab] = index
         extras.activate(tab)
     end
@@ -2237,23 +2298,31 @@ end
 
 function PHONE.extras.draw(tab)
     local extras = PHONE.extras
-    for i, entry in ipairs(extras[tab]) do
-        local y = 94 + (i - 1) * 75
+    local first = tab == "music" and extras.musicTop or 1
+    for i = first, math.min(first + 3, #extras[tab]) do
+        local entry = extras[tab][i]
+        local y = 94 + (i - first) * 75
         render.setColor(panel)
         render.drawRect(16, y, 480, 64)
         label(27, y + 9, entry[1], extras.selected[tab] == i and accent or ink)
-        if tab == "credits" then
+        if tab == "music" then
+            label(27, y + 34, entry[3] or "Half-Life 2", muted, smallFont)
+        elseif tab == "credits" then
             label(27, y + 34, entry[2], muted, smallFont)
             if entry[3] then label(402, y + 34, "Copy link", accent, smallFont) end
         end
     end
-    if tab == "music" then label(27, 412, "Stop  |  Space", accent) end
+    if tab == "music" then
+        label(27, 412, "Stop", accent)
+        label(181, 412, "< Prev page", accent)
+        label(345, 412, "Next page >", accent)
+    end
     if extras.message then
         for i, line in ipairs(wrapText(extras.message, 460, smallFont)) do
             label(22, 451 + (i - 1) * 16, line, muted, smallFont)
         end
     end
-    label(22, 487, tab == "credits" and "Up/Down selects | Enter copies link" or "Up/Down selects | Enter plays", muted, smallFont)
+    label(22, 487, tab == "credits" and "Up/Down selects | Enter copies link" or "Arrows select | PgUp/PgDn scrolls | Enter plays | Space stops", muted, smallFont)
 end
 
 local function changeGameTab(tab)
