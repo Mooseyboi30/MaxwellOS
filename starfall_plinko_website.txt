@@ -19,39 +19,51 @@ if SERVER then
     local payments = economy and economy.requestMoney and economy or nil
     -- Some servers expose payment prompts through economy and payouts through DarkRP.
     local payouts = economy and economy.giveMoney and economy or darkrp
-    local round, pending, owed
-    local status = "Confirm the payment to drop a ball."
+    local players = {}
+    local reserved = 0
+    local idle = "Confirm payment to drop a ball."
 
-    local function settle()
-        if not owed or not owed.player:isValid() then return end
+    local function settle(state)
+        if not state.owed or not state.owed.player:isValid() then return end
         local ok, paid = pcall(function()
-            if not payments.canAfford(owner(), owed.amount) then return false end
+            if not payments.canAfford(owner(), state.owed.amount) then return false end
             if payouts.canGiveMoney and not payouts.canGiveMoney() then return false end
-            return payouts.giveMoney(owed.player, owed.amount) ~= false
+            return payouts.giveMoney(state.owed.player, state.owed.amount) ~= false
         end)
         if ok and paid then
-            status = "Paid $" .. owed.amount .. " from the owner."
-            owed = nil
+            state.wonAt = timer.curtime()
+            state.status = "Paid $" .. state.owed.amount .. " from the owner."
+            reserved = reserved - state.reserve
+            state.reserve, state.owed = 0, nil
         end
     end
 
     timer.create("plinko_settle", 0.5, 0, function()
-        if round and not round.finished and timer.curtime() >= round.start + duration + (#round.balls - 1) * spacing then
-            round.finished = true
-            if round.total == 0 then status = "0x. No payout."
+        for _, state in pairs(players) do
+        if state.round and not state.round.finished and timer.curtime() >= state.round.start + duration + (#state.round.balls - 1) * spacing then
+            state.round.finished = true
+            if state.round.total == 0 then
+                reserved = reserved - state.reserve
+                state.reserve = 0
+                state.status = "0x. No payout."
             else
-                owed = {player = round.player, amount = round.total}
-                status = "Payout pending."
+                state.owed = {player = state.round.player, amount = state.round.total}
+                state.status = "Payout pending."
             end
         end
-        settle()
+        settle(state)
+        end
     end)
 
     local function drop(payer, count)
-        if not count or not payer or not payer:isValid() or payer == owner() or pending or owed
-            or (round and not round.finished) then return end
+        if not count or not payer or not payer:isValid() or payer == owner() then return end
+        local id = payer:getSteamID64()
+        local state = players[id] or {reserve = 0}
+        players[id] = state
+        if state.owed then state.owed.player = payer; return end
+        if state.pending or (state.round and not state.round.finished) then return end
         if not payments or not payments.canAfford or not payouts or not payouts.giveMoney then
-            status = "Server economy or payout API unavailable."
+            state.status = "Server economy or payout API unavailable."
             return
         end
         local ticket = {}
@@ -59,13 +71,15 @@ if SERVER then
         local ok = pcall(function()
             if payments.canMakeMoneyRequest and not payments.canMakeMoneyRequest(payer) then return end
             if payouts.canGiveMoney and not payouts.canGiveMoney() then return end
-            if not payments.canAfford(owner(), price * 5) then status = "House balance too low."; return end
-            if not payments.canAfford(payer, price) then status = "Player balance too low."; return end
-            pending = ticket
-            status = "Waiting for payment confirmation."
+            if not payments.canAfford(owner(), reserved + price * 5) then state.status = "House balance too low."; return end
+            if not payments.canAfford(payer, price) then state.status = "Player balance too low."; return end
+            state.reserve = price * 5
+            reserved = reserved + state.reserve
+            state.pending = ticket
+            state.status = "Waiting for payment confirmation."
             payments.requestMoney(payer, price, "Plinko: " .. count .. (count == 1 and " ball" or " balls"), function()
-                if pending ~= ticket then return end
-                pending = nil
+                if state.pending ~= ticket then return end
+                state.pending = nil
                 local balls, total = {}, 0
                 for ball = 1, count do
                     local path, bin = {256}, 1
@@ -77,15 +91,22 @@ if SERVER then
                     balls[ball] = {path = path, bin = bin}
                     total = total + COST * MULTIPLIERS[bin]
                 end
-                round = {start = timer.curtime(), balls = balls, total = total, player = payer}
-                status = tostring(count) .. " dropping..."
+                state.round = {start = timer.curtime(), balls = balls, total = total, player = payer}
+                state.status = tostring(count) .. " dropping..."
             end, function()
-                if pending == ticket then pending = nil; status = "Payment not completed." end
+                if state.pending == ticket then
+                    reserved = reserved - state.reserve
+                    state.reserve, state.pending = 0, nil
+                    state.status = "Payment not completed."
+                end
             end)
         end)
         if not ok then
-            if pending == ticket then pending = nil end
-            status = "Payment API unavailable or permission denied."
+            if state.pending == ticket then
+                reserved = reserved - state.reserve
+                state.reserve, state.pending = 0, nil
+            end
+            state.status = "Payment API unavailable or permission denied."
         end
     end
 
@@ -96,6 +117,9 @@ if SERVER then
         end
         if protocol == "starfall_website_button_v1" then drop(payer, actions[action]); return end
         if protocol ~= "starfall_website_screen_v1" then return end
+        local state = payer and payer:isValid() and players[payer:getSteamID64()]
+        local round = state and state.round
+        local status = state and state.status or idle
         local frame = {
             {"rect", 0, 0, 512, 512, 16, 24, 40},
             {"text", 30, 20, 450, 35, 240, 248, 255, NAME},
@@ -129,6 +153,16 @@ if SERVER then
                     local x = ball.path[index] + (ball.path[index + 1] - ball.path[index]) * (t - index + 1)
                     frame[#frame + 1] = {"rect", x - 6, 65 + t * 35, 12, 12, 255, 205, 75}
                 end
+            end
+        end
+        if state and state.wonAt and timer.curtime() - state.wonAt < 1 then
+            return frame, "win", "win:" .. state.wonAt
+        end
+        if round and not round.finished then
+            local elapsed = timer.curtime() - round.start
+            local ball = math.floor(elapsed / spacing) + 1
+            if ball >= 1 and ball <= #round.balls then
+                return frame, "drop", "drop:" .. round.start .. ":" .. ball
             end
         end
         return frame

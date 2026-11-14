@@ -1,10 +1,11 @@
 --@name Chatroom Computer
---@author v36.0
+--@author v36.1
 --@shared
 
-local CHIP_VERSION = "36.0"
+local CHIP_VERSION = "36.1"
 -- Get matching chip versions at https://github.com/Mooseyboi30/MaxwellOS
 local CHANGELOG = {
+    {"v36.1", "MaxwellNET supports timed website sound cues, including Plinko drops and payouts."},
     {"v36.0", "Added a five-slot save and load menu to Paint."},
     {"v35.9", "Added scrolling to the desktop app and game lists."},
     {"v35.8", "MaxwellNET buttons can play built-in sound cues at the viewer screen."},
@@ -686,6 +687,7 @@ net.receive("room_website_donate", function(_, ply)
 end)
 
 local nextWebsiteFrameRequest = 0
+local websiteFrameSound = {}
 net.receive("room_website_frame_request", function(_, ply)
     if ply ~= owner() or timer.curtime() < nextWebsiteFrameRequest then return end
     nextWebsiteFrameRequest = timer.curtime() + 0.2
@@ -723,6 +725,16 @@ net.receive("room_website_frame_request", function(_, ply)
         if command[1] == "text" then net.writeString(command[9]) end
     end
     net.send(ply)
+    local cue, token = results[1][2], results[1][3]
+    local soundId = cue == "drop" and 1 or (cue == "win" and 5 or nil)
+    if soundId and type(token) == "string" and #token <= 48 and websiteFrameSound[id] ~= token
+        and net.getBytesLeft() >= 32 then
+        websiteFrameSound[id] = token
+        net.start("room_website_sound")
+        net.writeUInt(id, 16)
+        net.writeUInt(soundId, 3)
+        net.send(ply)
+    end
 end)
 
 local nextJoin = 0
