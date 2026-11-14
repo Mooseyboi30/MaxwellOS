@@ -1,0 +1,136 @@
+--@name MaxwellOS Plinko
+--@shared
+
+local NAME = "Plinko"
+local COST = 100 -- DarkRP currency per confirmed drop
+local MULTIPLIERS = {5, 2, 1, 0, 0, 0, 1, 2, 5}
+local BUTTON = {512, buttons = {}}
+local counts = {1, 5, 10, 25}
+local actions = {}
+local duration, spacing = 1.6, 0.45
+for i, count in ipairs(counts) do
+    local action = "drop_" .. count
+    actions[action] = count
+    BUTTON.buttons[i] = {24 + (i - 1) * 118, 418, 110, 58, tostring(count), action}
+end
+local FONT = {"Roboto", 22, 500}
+
+if SERVER then
+    local payments = economy and economy.requestMoney and economy or nil
+    -- Some servers expose payment prompts through economy and payouts through DarkRP.
+    local payouts = economy and economy.giveMoney and economy or darkrp
+    local round, pending, owed
+    local status = "Confirm the payment to drop a ball."
+
+    local function settle()
+        if not owed or not owed.player:isValid() then return end
+        local ok, paid = pcall(function()
+            if not payments.canAfford(owner(), owed.amount) then return false end
+            if payouts.canGiveMoney and not payouts.canGiveMoney() then return false end
+            return payouts.giveMoney(owed.player, owed.amount) ~= false
+        end)
+        if ok and paid then
+            status = "Paid $" .. owed.amount .. " from the owner."
+            owed = nil
+        end
+    end
+
+    timer.create("plinko_settle", 0.5, 0, function()
+        if round and not round.finished and timer.curtime() >= round.start + duration + (#round.balls - 1) * spacing then
+            round.finished = true
+            if round.total == 0 then status = "0x. No payout."
+            else
+                owed = {player = round.player, amount = round.total}
+                status = "Payout pending."
+            end
+        end
+        settle()
+    end)
+
+    local function drop(payer, count)
+        if not count or not payer or not payer:isValid() or payer == owner() or pending or owed
+            or (round and not round.finished) then return end
+        if not payments or not payments.canAfford or not payouts or not payouts.giveMoney then
+            status = "Server economy or payout API unavailable."
+            return
+        end
+        local ticket = {}
+        local price = COST * count
+        local ok = pcall(function()
+            if payments.canMakeMoneyRequest and not payments.canMakeMoneyRequest(payer) then return end
+            if payouts.canGiveMoney and not payouts.canGiveMoney() then return end
+            if not payments.canAfford(owner(), price * 5) then status = "House balance too low."; return end
+            if not payments.canAfford(payer, price) then status = "Player balance too low."; return end
+            pending = ticket
+            status = "Waiting for payment confirmation."
+            payments.requestMoney(payer, price, "Plinko: " .. count .. (count == 1 and " ball" or " balls"), function()
+                if pending ~= ticket then return end
+                pending = nil
+                local balls, total = {}, 0
+                for ball = 1, count do
+                    local path, bin = {256}, 1
+                    for step = 1, 8 do
+                        local right = math.random(2) == 2
+                        if right then bin = bin + 1 end
+                        path[step + 1] = path[step] + (right and 24 or -24)
+                    end
+                    balls[ball] = {path = path, bin = bin}
+                    total = total + COST * MULTIPLIERS[bin]
+                end
+                round = {start = timer.curtime(), balls = balls, total = total, player = payer}
+                status = tostring(count) .. " dropping..."
+            end, function()
+                if pending == ticket then pending = nil; status = "Payment not completed." end
+            end)
+        end)
+        if not ok then
+            if pending == ticket then pending = nil end
+            status = "Payment API unavailable or permission denied."
+        end
+    end
+
+    hook.add("remote", "plinko", function(_, payer, protocol, action)
+        if protocol == "starfall_website_discover_v1" then return chip():entIndex(), NAME end
+        if protocol == "starfall_website_page_v1" then
+            return chip():entIndex(), NAME, NAME, {"Paid drops use in-game currency."}, false, FONT, false, false, BUTTON
+        end
+        if protocol == "starfall_website_button_v1" then drop(payer, actions[action]); return end
+        if protocol ~= "starfall_website_screen_v1" then return end
+        local frame = {
+            {"rect", 0, 0, 512, 512, 16, 24, 40},
+            {"text", 30, 20, 450, 35, 240, 248, 255, NAME},
+            {"text", 27, 484, 458, 25, 200, 225, 240, status}
+        }
+        for i, button in ipairs(BUTTON.buttons) do
+            local x = button[1]
+            frame[#frame + 1] = {"rect", x, 418, 110, 58, 34, 116, 102}
+            frame[#frame + 1] = {"text", x + 5, 435, 100, 30, 250, 255, 255,
+                counts[i] .. " / $" .. COST * counts[i]}
+        end
+        for row = 1, 5 do
+            for col = 0, row - 1 do
+                local x = 252 + (col - (row - 1) / 2) * 48
+                frame[#frame + 1] = {"rect", x, 85 + row * 42, 8, 8, 88, 148, 185}
+            end
+        end
+        for i, multiplier in ipairs(MULTIPLIERS) do
+            local x = 42 + (i - 1) * 48
+            local selected = round and round.finished and i == round.balls[#round.balls].bin
+            frame[#frame + 1] = {"rect", x, 353, 44, 42, selected and 155 or 40, 80, 104}
+            frame[#frame + 1] = {"text", x + 7, 361, 35, 26, 245, 250, 255, multiplier .. "x"}
+        end
+        if round then
+            local elapsed = timer.curtime() - round.start
+            for i, ball in ipairs(round.balls) do
+                local age = elapsed - (i - 1) * spacing
+                if age >= 0 and age < duration then
+                    local t = age * 8 / duration
+                    local index = math.min(8, math.floor(t) + 1)
+                    local x = ball.path[index] + (ball.path[index + 1] - ball.path[index]) * (t - index + 1)
+                    frame[#frame + 1] = {"rect", x - 6, 65 + t * 35, 12, 12, 255, 205, 75}
+                end
+            end
+        end
+        return frame
+    end)
+end

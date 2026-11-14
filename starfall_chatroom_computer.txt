@@ -1,11 +1,12 @@
 --@name Chatroom Computer
---@author v34.6
+--@author v35.7
 --@shared
 
-local CHIP_VERSION = "34.6"
+local CHIP_VERSION = "35.7"
 -- Get matching chip versions at https://github.com/Mooseyboi30/MaxwellOS
 local CHANGELOG = {
-    {"v34.6", "Website Viewer forwards site-defined button actions through a shared protocol."},
+    {"v35.7", "Pong paddles follow the crosshair on linked screens."},
+    {"v35.6", "Website Viewer supports up to 64 site-defined buttons with Lua action handlers."},
     {"v33.5", "Added an occasional Calculator greeting."},
     {"v33.4", "Expanded Calculator with scientific functions and degree/radian modes."},
     {"v33.3", "Fixed the pocket computer HUD opening crash."},
@@ -502,7 +503,7 @@ net.receive("room_directory_request", function(_, ply)
     update()
 end)
 
-local requestedWebsiteAction
+local requestedWebsiteButtons
 local nextWebsiteRequest, requestedWebsiteId = 0, 0
 net.receive("room_website_request", function(_, ply)
     if ply ~= owner() then return end
@@ -570,19 +571,28 @@ net.receive("room_website_request", function(_, ply)
             }
             local options = type(result[9]) == "table" and result[9] or {}
             page.height = bounded(options[1], 512, 1023, 512)
-            local buy = {
-                bounded(options[2], 0, 511, 0), bounded(options[3], 0, 1022, 0),
-                bounded(options[4], 1, 512, 0), bounded(options[5], 1, 512, 0), clean(options[6], 60)
-            }
-            if buy[3] > 0 and buy[4] > 0 and buy[1] + buy[3] <= 512
-                and buy[2] + buy[4] <= page.height and buy[5] ~= "" then
-                page.buy = buy
-                local action = options[7]
-                if buy[5] == "generate_haiku_v1" or buy[5] == "plinko_drop_v1" then
-                    action = buy[5]
-                end
-                if type(action) == "string" and #action <= 40 and action:match("^[A-Za-z0-9_-]+$") then
-                    page.action = action
+            page.buttons = {}
+            local layout = type(options.buttons) == "table" and options.buttons
+                or {{options[2], options[3], options[4], options[5], options[6], options[7]}}
+            for i = 1, math.min(#layout, 64) do
+                local item = layout[i]
+                if type(item) == "table" then
+                    local button = {
+                        bounded(item[1], 0, 511, 0), bounded(item[2], 0, 1022, 0),
+                        bounded(item[3], 1, 512, 0), bounded(item[4], 1, 512, 0),
+                        clean(item[5], 60), ""
+                    }
+                    local action = item[6]
+                    if not options.buttons and (button[5] == "generate_haiku_v1" or button[5] == "plinko_drop_v1") then
+                        action = button[5]
+                    end
+                    if type(action) == "string" and #action <= 40 and action:match("^[A-Za-z0-9_-]+$") then
+                        button[6] = action
+                    end
+                    if button[3] > 0 and button[4] > 0 and button[1] + button[3] <= 512
+                        and button[2] + button[4] <= page.height and button[5] ~= "" then
+                        page.buttons[#page.buttons + 1] = button
+                    end
                 end
             end
             for i = 1, math.min(#result[4], 5) do page.lines[i] = clean(result[4][i], 42) end
@@ -593,12 +603,13 @@ net.receive("room_website_request", function(_, ply)
     local bytes = 16
     for i = 1, count do bytes = bytes + 4 + #sites[i].name end
     if page then
-        bytes = bytes + 44 + #(page.action or "") + #page.title + #page.face + (page.buy and #page.buy[5] or 0)
+        bytes = bytes + 44 + #page.title + #page.face
+        for _, button in ipairs(page.buttons) do bytes = bytes + 8 + #button[5] + #button[6] end
         for _, line in ipairs(page.lines) do bytes = bytes + #line + 1 end
     end
     if net.getBytesLeft() < bytes then return end
     requestedWebsiteId = selected and id or 0
-    requestedWebsiteAction = page and page.action
+    requestedWebsiteButtons = page and page.buttons
     net.start("room_website_pages")
     net.writeUInt(count, 4)
     for i = 1, count do
@@ -614,11 +625,11 @@ net.receive("room_website_request", function(_, ply)
         net.writeUInt(page.size, 7)
         net.writeUInt(page.weight, 10)
         net.writeUInt(page.height, 10)
-        net.writeBool(page.buy ~= nil)
-        if page.buy then
-            for i = 1, 4 do net.writeUInt(page.buy[i], 10) end
-            net.writeString(page.buy[5])
-            net.writeString(page.action or "")
+        net.writeUInt(#page.buttons, 7)
+        for _, button in ipairs(page.buttons) do
+            for i = 1, 4 do net.writeUInt(button[i], 10) end
+            net.writeString(button[5])
+            net.writeString(button[6])
         end
         if page.mode == 1 then net.writeUInt(page.uptime, 32) end
         if page.mode == 2 then
@@ -634,11 +645,18 @@ local nextWebsiteButton = 0
 net.receive("room_website_button", function(_, ply)
     if ply ~= owner() or timer.curtime() < nextWebsiteButton then return end
     local id = net.readUInt(16)
-    if id == 0 or id ~= requestedWebsiteId or not requestedWebsiteAction then return end
+    if id == 0 or id ~= requestedWebsiteId or not requestedWebsiteButtons then return end
     local site = entity(id)
     if not site or not site:isValid() or site:getClass() ~= "starfall_processor" then return end
     nextWebsiteButton = timer.curtime() + 0.5
-    pcall(hook.runRemote, site, "starfall_website_button_v1", requestedWebsiteAction)
+    local action = net.readString()
+    if #action > 40 or action == "" then return end
+    for _, button in ipairs(requestedWebsiteButtons) do
+        if button[6] == action then
+            pcall(hook.runRemote, site, "starfall_website_button_v1", action)
+            return
+        end
+    end
 end)
 
 local nextWebsiteDonation = 0
@@ -1112,19 +1130,22 @@ end
 
 function websiteControls.buy(x, y)
     local page = websitePages[selectedWebsite]
-    local buy = page and page.buy
-    if not buy or not websiteFrame or websiteFrameSite ~= page.id then return end
-    local top = buy[2] - (page.scroll or 0)
-    if x then
-        if x < buy[1] or x >= buy[1] + buy[3] or y < 0 or y >= 512 or y < top or y >= top + buy[4] then return end
-    elseif top < 0 or top + buy[4] > 512 then return end
-    if page.action ~= "" then
-        if net.getBytesLeft() < 32 then return end
-        net.start("room_website_button")
-        net.writeUInt(page.id, 16)
-        net.send()
-    else
-        websiteControls.message = buy[5]
+    if not page or not page.buttons or not websiteFrame or websiteFrameSite ~= page.id then return end
+    for _, button in ipairs(page.buttons) do
+        local top = button[2] - (page.scroll or 0)
+        local inside = x and x >= button[1] and x < button[1] + button[3]
+            and y >= 0 and y < 512 and y >= top and y < top + button[4]
+        if inside or (not x and top >= 0 and top + button[4] <= 512) then
+            if button[6] == "" then
+                websiteControls.message = button[5]
+            elseif net.getBytesLeft() >= 32 + #button[6] then
+                net.start("room_website_button")
+                net.writeUInt(page.id, 16)
+                net.writeString(button[6])
+                net.send()
+            end
+            return
+        end
     end
 end
 
@@ -2494,12 +2515,13 @@ if isOwner then
             page.face, page.size, page.weight = net.readString(), net.readUInt(7), net.readUInt(10)
             page.height = net.readUInt(10)
             page.scroll = math.min(page.scroll or 0, page.height - 512)
-            page.buy = nil
-            if net.readBool() then
-                page.buy = {}
-                for i = 1, 4 do page.buy[i] = net.readUInt(10) end
-                page.buy[5] = net.readString()
-                page.action = net.readString()
+            page.buttons = {}
+            local count = net.readUInt(7)
+            for i = 1, count do
+                local button = {}
+                for j = 1, 4 do button[j] = net.readUInt(10) end
+                button[5], button[6] = net.readString(), net.readString()
+                page.buttons[i] = button
             end
             page.amounts, page.lines = {}, {}
             if page.demo then page.startedAt = timer.curtime() - net.readUInt(32) / 10 end
@@ -3686,7 +3708,7 @@ local function renderMatchTab()
         label(36, 87, game.host .. " " .. ball.a .. "  |  " .. ball.b .. " " .. game.guest, ink)
         local hint = game.guest == "" and "Waiting for another player"
             or (game.winner ~= "" and (game.winner == game.mark and "You won!  R rematch" or "You lost.  R rematch")
-            or "Up/Down moves your paddle  |  First to 7")
+            or "Aim or use Up/Down  |  First to 7")
         label(36, 448, hint, accent)
     else
         local game = currentGame
@@ -4215,7 +4237,24 @@ function PHONE.drawComputerScreen()
         or "Look at the Wiremod Keyboard and press E"
     label(22, 483, status ~= "" and status or hint, muted, smallFont)
 end
-hook.add("render", "chatroom_screen", PHONE.drawComputerScreen)
+hook.add("render", "chatroom_screen", function()
+    if isOwner and poweredOn and timer.curtime() >= startupUntil and gameTab == "pong"
+        and currentGame and currentGame.pong and currentGame.guest ~= "" and currentGame.winner == ""
+        and (tonumber(roomVersion) or 0) >= 35.7 then
+        local now = timer.curtime()
+        if now >= (PHONE.pongAimAt or 0) then
+            PHONE.pongAimAt = now + 0.10
+            local _, y = render.cursorPos()
+            if y then
+                local target = math.max(32, math.min(268, math.floor(y - 120 + 0.5)))
+                local ball = currentGame.pong
+                local paddle = currentGame.mark == "X" and ball.left or ball.right
+                if math.abs(target - paddle) >= 2 then sendGameAction(4, 100 + target) end
+            end
+        end
+    end
+    PHONE.drawComputerScreen()
+end)
 
 hook.add("drawhud", "chatroom_phone", function()
     if not isOwner or not PHONE.open then return end

@@ -1,6 +1,6 @@
 # Build a MaxwellOS website
 
-Copy [the template chip](starfall_website_template.txt), change its name and drawing commands, and upload it as a separate shared Starfall chip. Open **Desktop → Apps → Website Viewer** on MaxwellOS v34.6 or later. Aim at the example button and press **E**, or press **Enter** while it is fully visible. The shared counter should increase. This template targets Website Viewer. A physical Starfall screen needs its own client render hook.
+Copy [the template chip](starfall_website_template.txt), change its name and drawing commands, and upload it as a separate shared Starfall chip. Open **Desktop → Apps → Website Viewer** on MaxwellOS v35.6 or later. Aim at **Add one** or **Reset** and press **E**. **Enter** activates the first fully visible button in list order. This template targets Website Viewer. A physical Starfall screen needs its own client render hook.
 
 ## Remote hook contract
 
@@ -30,12 +30,17 @@ A height above 512 enables scrolling. The viewer requests drawing frames only fo
 
 ## Buttons
 
-Publish one interactive button per site using the ninth page return value:
+Publish up to 64 buttons using the ninth page return value:
 
 ```lua
-{pageHeight, x, y, width, height, promptText, actionId}
+local options = {512, buttons = {
+    {96, 370, 150, 56, "Add one", "increment"},
+    {266, 370, 150, 56, "Reset", "reset"}
+}}
 ```
 
-The button bounds must fit inside the page. Draw its visible label and background in your frame. Use an action ID of up to 40 ASCII letters, digits, underscores, or hyphens. With an action ID, MaxwellOS forwards the click to your server hook. Without one, the viewer displays the prompt text locally. Omit the coordinates to publish a page with no button.
+The first field is page height. Each button contains x, y, width, height, prompt text, and an optional action ID. Draw visible labels and backgrounds in the frame, and keep hitboxes inside the page and clear of each other. The 48-command graphics limit still applies. Leaving out the action ID displays the prompt locally. Existing sites can still use the flat single-button options format.
+
+The action ID uses up to 40 ASCII letters, digits, underscores, or hyphens. Define a Lua function for each action in the website chip and call it from the server's `starfall_website_button_v1` handler. The template shows how to dispatch IDs through a Lua function table.
 
 Handle only the action IDs your site defines. Validate the requesting player, permissions, and game state in your own handler before changing state or requesting in-game currency. Website Viewer supplies the display and input. The site owns its actions and data.
