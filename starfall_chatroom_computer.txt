@@ -1,10 +1,11 @@
 --@name Chatroom Computer
---@author v39.3
+--@author v39.4
 --@shared
 
-local CHIP_VERSION = "39.3"
+local CHIP_VERSION = "39.4"
 -- Get matching chip versions at https://github.com/Mooseyboi30/MaxwellOS
 local CHANGELOG = {
+    {"v39.4", "The one free man crossbow bolts pierce enemies, crates, and low cover."},
     {"v39.3", "Silenced keyboard clicks during Pong, Star Squadron, and The one free man."},
     {"v39.2", "Solo game update hooks run only while their app is open and powered on."},
     {"v39.1", "Updated The one free man with smooth movement and Wiremod controls, and fixed a startup crash in weapon slot initialization."},
@@ -2989,25 +2990,47 @@ PHONE.freeMan = (function()
         end
     end
 
+    local function pierceTargets(p,distance,barrier)
+        p.hit=p.hit or {}
+        for kind=1,2 do
+            local list=kind==1 and enemies or crates
+            for _,actor in ipairs(list) do
+                if actor.hp>0 and not p.hit[actor] then
+                    local dx,dy=actor.x-p.x,actor.y-p.y
+                    local depth=dx*p.dx+dy*p.dy
+                    local covered=p.crossedBarrier or (barrier and barrier<depth)
+                    if depth>=0 and depth<=distance and abs(dx*p.dy-dy*p.dx)<0.31
+                        and not (actor.ducking and covered) then
+                        p.hit[actor]=true
+                        hit(actor,p.damage)
+                        effect(kind==1 and "weapons/crossbow/hitbod1.wav" or "weapons/crossbow/hit1.wav",0.58)
+                    end
+                end
+            end
+        end
+        if barrier and barrier<=distance then p.crossedBarrier=true end
+    end
+
     local function updateProjectiles(dt)
         for i = #projectiles, 1, -1 do
             local p = projectiles[i]
             local travel = p.speed*dt
-            local wall,_,_,_,_,_,barrier = cast(p.x,p.y,p.dx,p.dy,not p.friendly)
-            if barrier then wall=min(wall,barrier) end
+            local piercing=p.kind=="crossbowBolt"
+            local wall,_,_,_,_,_,barrier = cast(p.x,p.y,p.dx,p.dy,piercing or not p.friendly)
+            if barrier and not p.friendly then wall=min(wall,barrier) end
             local distance = min(travel,max(0,wall-0.01))
-            local target = p.friendly and targetAt(p.x,p.y,p.dx,p.dy,travel+0.13,0.31)
+            local target
+            if piercing then
+                pierceTargets(p,distance,barrier)
+            elseif p.friendly then
+                target=targetAt(p.x,p.y,p.dx,p.dy,travel+0.13,0.31)
+            end
             p.x, p.y, p.life = p.x+p.dx*distance, p.y+p.dy*distance, p.life-dt
             local nearPlayer = (px-p.x)^2+(py-p.y)^2
             local collision = wall <= travel or target or (not p.friendly and nearPlayer < 0.11)
             if collision or p.life <= 0 then
-                if p.friendly and not p.blast then
-                    if target then
-                        hit(target,p.damage)
-                        effect(target.kind=="supply" and "weapons/crossbow/hit1.wav" or "weapons/crossbow/hitbod1.wav",0.58)
-                    elseif collision then
-                        effect("weapons/crossbow/hit1.wav",0.52)
-                    end
+                if piercing then
+                    if collision then effect("weapons/crossbow/hit1.wav",0.52) end
                 elseif p.friendly then
                     explodeRocket(p,target)
                 else
