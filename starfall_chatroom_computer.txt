@@ -1,11 +1,11 @@
 --@name Chatroom Computer
---@author v39.4
+--@author v39.5
 --@shared
 
-local CHIP_VERSION = "39.4"
+local CHIP_VERSION = "39.5"
 -- Get matching chip versions at https://github.com/Mooseyboi30/MaxwellOS
 local CHANGELOG = {
-    {"v39.4", "The one free man crossbow bolts pierce enemies, crates, and low cover."},
+    {"v39.5", "The one free man crossbow bolts pierce enemies, crates, and low cover. Fixed Starfall compatibility in sprite rendering."},
     {"v39.3", "Silenced keyboard clicks during Pong, Star Squadron, and The one free man."},
     {"v39.2", "Solo game update hooks run only while their app is open and powered on."},
     {"v39.1", "Updated The one free man with smooth movement and Wiremod controls, and fixed a startup crash in weapon slot initialization."},
@@ -3676,8 +3676,11 @@ PHONE.freeMan = (function()
                         else
                             local l = max(left, edges[i])
                             local clip=barrierDepths[i] and s.depth>=barrierDepths[i] and barrierTops[i] or VIEW
-                            repeat i = i+1 until i > RAYS or edges[i] >= right or s.depth >= depths[i]
-                                or (barrierDepths[i] and s.depth>=barrierDepths[i] and barrierTops[i] or VIEW)~=clip
+                            i = i + 1
+                            while i <= RAYS and edges[i] < right and s.depth < depths[i]
+                                and (barrierDepths[i] and s.depth>=barrierDepths[i] and barrierTops[i] or VIEW)==clip do
+                                i = i + 1
+                            end
                             local r = min(right, edges[i])
                             for _, run in ipairs(runs) do
                                 local t, b = max(0, top+run[2]*height), min(clip, top+run[3]*height)
