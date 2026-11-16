@@ -1,10 +1,11 @@
 --@name Chatroom Computer
---@author v39.2
+--@author v39.3
 --@shared
 
-local CHIP_VERSION = "39.2"
+local CHIP_VERSION = "39.3"
 -- Get matching chip versions at https://github.com/Mooseyboi30/MaxwellOS
 local CHANGELOG = {
+    {"v39.3", "Silenced keyboard clicks during Pong, Star Squadron, and The one free man."},
     {"v39.2", "Solo game update hooks run only while their app is open and powered on."},
     {"v39.1", "Updated The one free man with smooth movement and Wiremod controls, and fixed a startup crash in weapon slot initialization."},
     {"v37.9", "Smoothed Star Squadron and Pong movement with immediate held-direction repeat."},
@@ -5046,15 +5047,18 @@ if isOwner then
             local key = net.readUInt(8)
             if keyboardActive and poweredOn and not PHONE.controlsLocked and timer.curtime() >= startupUntil then
                 local enter = key == 10 or key == 13 or key == 142
+                local quiet = gameTab == "pong" or gameTab == "squadron" or gameTab == "free_man"
                 local cue = enter and "enter" or (gameTab and "game" or "key")
                 handleKey(key)
-                if key < 17 or key > 20 then
-                    playChatSound(cue)
-                else
-                    local now = timer.curtime()
-                    if now >= nextArrowSound then
-                        nextArrowSound = now + 0.05
+                if not quiet then
+                    if key < 17 or key > 20 then
                         playChatSound(cue)
+                    else
+                        local now = timer.curtime()
+                        if now >= nextArrowSound then
+                            nextArrowSound = now + 0.05
+                            playChatSound(cue)
+                        end
                     end
                 end
             end
