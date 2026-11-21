@@ -1,10 +1,12 @@
 --@name Chatroom Computer
---@author v39.5
+--@author v39.7
 --@shared
 
-local CHIP_VERSION = "39.5"
+local CHIP_VERSION = "39.7"
 -- Get matching chip versions at https://github.com/Mooseyboi30/MaxwellOS
 local CHANGELOG = {
+    {"v39.7", "MaxwellNET websites support held-button cursor dragging and scratch-off coatings."},
+    {"v39.6", "Added aim-controlled left and right click on the PC screen."},
     {"v39.5", "The one free man crossbow bolts pierce enemies, crates, and low cover. Fixed Starfall compatibility in sprite rendering."},
     {"v39.3", "Silenced keyboard clicks during Pong, Star Squadron, and The one free man."},
     {"v39.2", "Solo game update hooks run only while their app is open and powered on."},
@@ -727,6 +729,22 @@ net.receive("room_website_donate", function(_, ply)
     net.send(ply)
 end)
 
+-- Pointer events are scoped to the owner and their currently selected website.
+local nextWebsitePointer = 0
+net.receive("room_website_pointer", function(_, ply)
+    if ply ~= owner() or timer.curtime() < nextWebsitePointer then return end
+    local id = net.readUInt(16)
+    local x, y = net.readUInt(10), net.readUInt(10)
+    local held, right = net.readBool(), net.readBool()
+    if id ~= requestedWebsiteId or x > 511 or y > 1023 then return end
+    local site = entity(id)
+    if not site or not site:isValid() or site:getClass() ~= "starfall_processor" then return end
+    -- Raw mouse state comes from the authenticated owner: control locking
+    -- suppresses game attack/use flags while the browser has focus.
+    nextWebsitePointer = timer.curtime() + 0.08
+    pcall(hook.runRemote, site, "starfall_website_pointer_v1", x, y, held, right)
+end)
+
 local nextWebsiteFrameRequest = 0
 local websiteFrameSound = {}
 net.receive("room_website_frame_request", function(_, ply)
@@ -738,7 +756,7 @@ net.receive("room_website_frame_request", function(_, ply)
     if not processor or not processor:isValid() or processor:getClass() ~= "starfall_processor" then return end
     local ok, results = pcall(hook.runRemote, processor, "starfall_website_screen_v1")
     local frame = ok and type(results) == "table" and type(results[1]) == "table" and results[1][1]
-    if type(frame) ~= "table" or #frame < 1 or #frame > 48 then return end
+    if type(frame) ~= "table" or #frame < 1 or #frame > 384 then return end
     local commands, bytes = {}, 32
     for _, command in ipairs(frame) do
         if type(command) ~= "table" or (command[1] ~= "rect" and command[1] ~= "text") then return end
@@ -758,7 +776,7 @@ net.receive("room_website_frame_request", function(_, ply)
     if net.getBytesLeft() < bytes then return end
     net.start("room_website_frame")
     net.writeUInt(id, 16)
-    net.writeUInt(#commands, 6)
+    net.writeUInt(#commands, 9)
     for _, command in ipairs(commands) do
         net.writeBool(command[1] == "text")
         for i = 2, 5 do net.writeUInt(math.floor(command[i] + 0.5), 10) end
@@ -4237,7 +4255,7 @@ if isOwner then
         if processor and processor:isValid() and processor:getClass() == "starfall_processor" then
             local ok, results = pcall(hook.runRemote, processor, "starfall_website_screen_v1")
             local frame = ok and type(results) == "table" and type(results[1]) == "table" and results[1][1]
-            if type(frame) == "table" and #frame > 0 and #frame <= 48 then
+            if type(frame) == "table" and #frame > 0 and #frame <= 384 then
                 websiteFrame, websiteFrameSite = frame, page.id
                 return
             end
@@ -4284,7 +4302,7 @@ if isOwner then
         local page = websitePages[selectedWebsite]
         if not poweredOn or gameTab ~= "website" or not page or page.id ~= id then return end
         local frame = {}
-        local count = net.readUInt(6)
+        local count = net.readUInt(9)
         for i = 1, count do
             local command = {net.readBool() and "text" or "rect"}
             for j = 2, 5 do command[j] = net.readUInt(10) end
@@ -4519,20 +4537,74 @@ if isOwner then
         themes.selectAt(y, x)
     end
 
+    function PHONE.screenClick(x, y)
+        if not x or not y or x < 0 or x >= 512 or y < 0 or y >= 512
+            or not poweredOn or timer.curtime() < startupUntil then return end
+        if gameTab == "free_man" then
+            PHONE.freeMan.key(101, false)
+        else
+            PHONE.computerClickAt(x, y)
+        end
+    end
+
     hook.add("StarfallUsed", "chatroom_theme", function(user, screen)
         if user ~= player() or not screen or not screen:isValid()
             or screen:getClass() ~= "starfall_screen" then return end
-        websiteControls.soundScreen = screen
         local x, y = render.cursorPos(user, screen)
-        if x and y and poweredOn and timer.curtime() >= startupUntil and not PHONE.controlsLocked
-            and not keyboardActive and not PHONE.open then
+        if not x or not y or not poweredOn or timer.curtime() < startupUntil then return end
+        websiteControls.soundScreen = screen
+        PHONE.mouseScreen = screen
+        if not PHONE.controlsLocked and not keyboardActive and not PHONE.open then
             PHONE.setControlsLocked(true, true)
         end
-        if gameTab == "free_man" and x and y and poweredOn and timer.curtime() >= startupUntil then
-            PHONE.freeMan.key(101, false)
-            return
+        PHONE.screenClick(x, y)
+    end)
+
+    function PHONE.screenMouseActive()
+        return not PHONE.open and poweredOn and timer.curtime() >= startupUntil
+            and (PHONE.controlsLocked or keyboardActive) and hasPermission("input")
+            and PHONE.mouseScreen and PHONE.mouseScreen:isValid()
+    end
+
+    hook.add("inputpressed", "chatroom_screen_mouse", function(button)
+        if button ~= MOUSE.LEFT and button ~= MOUSE.RIGHT then return end
+        if not PHONE.screenMouseActive() then return end
+        local user, screen = player(), PHONE.mouseScreen
+        if user:getEyeTrace().Entity ~= screen then return end
+        PHONE.screenClick(render.cursorPos(user, screen))
+    end)
+
+    -- Continuous website coordinates use the same viewport as click controls.
+    local nextPointer, pointerWasHeld = 0, false
+    hook.add("think", "room_website_pointer", function()
+        if not isOwner or not poweredOn or gameTab ~= "website" then return end
+        if timer.curtime() < nextPointer then return end
+        local page = websitePages[selectedWebsite]
+        if not page or not page.title or page.demo or page.donation then return end
+        local user = player()
+        local screen = PHONE.mouseScreen
+        if not screen or not screen:isValid() or user:getEyeTrace().Entity ~= screen then return end
+        local x, y = render.cursorPos(user, screen)
+        if not x or not y then return end
+        local px, py = (x - 96) / 0.625, (y - 132) / 0.625
+        local held = user:keyDown(IN_KEY.USE) or user:keyDown(IN_KEY.ATTACK)
+        local right = user:keyDown(IN_KEY.ATTACK2)
+        if hasPermission("input") then
+            held = held or input.isKeyDown(KEY.E) or input.isMouseDown(MOUSE.LEFT)
+            right = right or input.isMouseDown(MOUSE.RIGHT)
         end
-        PHONE.computerClickAt(x, y)
+        if px < 0 or px >= 512 or py < 0 or py >= 512 then held, right = false, false end
+        if not held and not right and not pointerWasHeld then return end
+        if net.getBytesLeft() < 48 then return end
+        pointerWasHeld = held or right
+        nextPointer = timer.curtime() + 0.1
+        net.start("room_website_pointer")
+        net.writeUInt(page.id, 16)
+        net.writeUInt(math.max(0, math.min(511, math.floor(px))), 10)
+        net.writeUInt(math.max(0, math.min(1023, math.floor(py + (page.scroll or 0)))), 10)
+        net.writeBool(held)
+        net.writeBool(right)
+        net.send()
     end)
 
     net.receive("room_games_state", function()
@@ -6143,6 +6215,17 @@ hook.add("render", "chatroom_screen", function()
         end
     end
     PHONE.drawComputerScreen()
+    if isOwner and PHONE.screenMouseActive() and player():getEyeTrace().Entity == PHONE.mouseScreen then
+        local x, y = render.cursorPos()
+        if x and y and x >= 0 and x < 512 and y >= 0 and y < 512 then
+            render.setColor(Color(0, 0, 0))
+            render.drawRect(x - 2, y - 9, 5, 19)
+            render.drawRect(x - 9, y - 2, 19, 5)
+            render.setColor(Color(255, 255, 255))
+            render.drawRect(x, y - 8, 1, 17)
+            render.drawRect(x - 8, y, 17, 1)
+        end
+    end
 end)
 
 hook.add("drawhud", "chatroom_phone", function()

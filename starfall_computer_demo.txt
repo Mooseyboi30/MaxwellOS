@@ -5,7 +5,37 @@
 -- Link a Starfall screen. Optionally wire the keyboard's Keys and User outputs
 -- to KeyboardKeys and KeyboardUser. A wired Power value of 0 turns it off.
 
+local SCREEN_MESSAGE = "demo_shared_screen"
+local MAX_FRAME_BYTES = 12000
+local CONTROL_MESSAGE = "demo_shared_control"
+local CLICK, KEY_PRESS, KEEPALIVE, RELEASE = 0, 1, 2, 3
+
+local function sendScreenFrame(data, recipient)
+    if net.getBytesLeft() < #data + 64 then return false end
+    net.start(SCREEN_MESSAGE)
+    net.writeUInt(#data, 14)
+    net.writeData(data, #data)
+    net.send(recipient)
+    return true
+end
+
+local function readScreenFrame(bits)
+    local bytes = net.readUInt(14)
+    if bytes > 0 and bytes <= MAX_FRAME_BYTES and bits >= bytes * 8 then
+        return net.readData(bytes)
+    end
+end
+
 if SERVER then
+local pendingFrame
+net.receive(SCREEN_MESSAGE, function(bits, sender)
+    if sender ~= owner() then return end
+    pendingFrame = readScreenFrame(bits) or pendingFrame
+end)
+timer.create("demo_screen_relay", 0.15, 0, function()
+    if pendingFrame and sendScreenFrame(pendingFrame) then pendingFrame = nil end
+end)
+
 wire.adjustInputs({"KeyboardKeys", "KeyboardUser", "Power"}, {"array", "entity", "number"})
 local heldKeys = {}
 local pendingKeys, firstPendingKey, lastPendingKey = {}, 1, 0
@@ -13,6 +43,51 @@ local keyRetryScheduled = false
 local keyboardUser
 local sentPower
 local wirePowered = true
+local controller, controlUntil, nextKeyAt = nil, 0, 0
+
+net.receive(CONTROL_MESSAGE, function(_, sender)
+    local action = net.readUInt(2)
+    local now = timer.curtime()
+    if controller and (not controller:isValid() or now >= controlUntil) then controller = nil end
+    if action == RELEASE then
+        if sender == controller then controller = nil end
+        return
+    end
+    if not wirePowered or (controller and controller ~= sender) or net.getBytesLeft() < 128 then return end
+    if action == CLICK then
+        local screen = entity(net.readUInt(16))
+        local x, y = net.readUInt(9), net.readUInt(9)
+        if not screen or not screen:isValid() or screen:getClass() ~= "starfall_screen"
+            or sender:getEyeTrace().Entity ~= screen
+            or sender:getEyePos():getDistance(screen:getPos()) > 200 then return end
+        local linked = false
+        for _, component in ipairs(chip():getLinkedComponents()) do
+            if component == screen then linked = true; break end
+        end
+        if not linked then return end
+        controller, controlUntil = sender, now + 5
+        net.start(CONTROL_MESSAGE)
+        net.writeUInt(CLICK, 2)
+        net.writeUInt(x, 9)
+        net.writeUInt(y, 9)
+        net.send(owner())
+    elseif sender ~= controller then
+        return
+    elseif action == KEY_PRESS then
+        if now < nextKeyAt then return end
+        nextKeyAt = now + 0.015
+        local key = net.readUInt(8)
+        net.start(CONTROL_MESSAGE)
+        net.writeUInt(KEY_PRESS, 2)
+        net.writeUInt(key, 8)
+        net.send(owner())
+        return
+    end
+    controlUntil = now + 5
+    net.start(CONTROL_MESSAGE)
+    net.writeUInt(KEEPALIVE, 2)
+    net.send(sender)
+end)
 
 local function sendPower(ply)
     if net.getBytesLeft() < 32 then return false end
@@ -34,7 +109,7 @@ local function flushKeyboard()
         end
         firstPendingKey = firstPendingKey + count
         if firstPendingKey > lastPendingKey then firstPendingKey, lastPendingKey = 1, 0 end
-        net.send(keyboardUser)
+        net.send(owner())
     end
     if firstPendingKey <= lastPendingKey and not keyRetryScheduled then
         keyRetryScheduled = true
@@ -49,6 +124,7 @@ local function syncWirePower()
     local powered = not wire.isConnected(chip(), "Power") or wire.ports.Power ~= 0
     if powered ~= wirePowered then
         wirePowered = powered
+        controller = nil
         heldKeys = {}
         pendingKeys, firstPendingKey, lastPendingKey = {}, 1, 0
     end
@@ -90,7 +166,49 @@ hook.add("ClientInitialized", "demo_power", function(ply)
     sendPower(ply)
 end)
 timer.create("demo_power_sync", 0.5, 0, syncWirePower)
+local movementKeys = {17, 18, 19, 20, 32, 65, 68, 83, 87, 97, 100, 115, 119}
+timer.create("demo_held_keys", 0.05, 0, function()
+    if not wirePowered or not keyboardUser or not keyboardUser:isValid() or net.getBytesLeft() < 48 then return end
+    local keys = {}
+    for _, key in ipairs(movementKeys) do
+        if heldKeys[key] then keys[#keys+1] = key end
+    end
+    if #keys == 0 then return end
+    net.start("demo_held_keys")
+    net.writeUInt(#keys, 4)
+    for _, key in ipairs(keys) do net.writeUInt(key, 8) end
+    net.send(owner())
+end)
 return
+end
+
+local display = render
+local render = setmetatable({}, {__index = display})
+local fonts, fontIds = {}, {}
+local frame
+local drawMethods = {"drawRect", "drawRectOutline", "drawLine", "drawText"}
+function render.createFont(...)
+    local font = display.createFont(...)
+    if not fontIds[font] then
+        fonts[#fonts+1] = font
+        fontIds[font] = #fonts
+    end
+    return font
+end
+function render.setFont(font)
+    if frame then frame[#frame+1] = {5, fontIds[font]} end
+    display.setFont(font)
+end
+function render.setColor(color)
+    if frame then frame[#frame+1] = {6, color.r, color.g, color.b, color.a} end
+    display.setColor(color)
+end
+for index, method in ipairs(drawMethods) do
+    local draw = display[method]
+    render[method] = function(...)
+        if frame then frame[#frame+1] = {index, ...} end
+        draw(...)
+    end
 end
 
 local calculator = {entry = "", result = false}
@@ -111,11 +229,13 @@ local selectedGame = 1
 
 local GAMES = {
     {tab = "mines", name = "Minesweeper", detail = "Solo puzzles with No Guess"},
-    {tab = "squadron", name = "Star Squadron", detail = "Solo arcade shooter"}
+    {tab = "squadron", name = "Star Squadron", detail = "Solo arcade shooter"},
+    {tab = "free_man", name = "The One Free Man", detail = "Solo Combine roguelike"}
 }
 local APPS = {
     {tab = "calculator", name = "Calculator", detail = "Scientific calculator"},
-    {tab = "paint", name = "Paint", detail = "50 x 50 pixel canvas"}
+    {tab = "paint", name = "Paint", detail = "50 x 50 pixel canvas"},
+    {tab = "music", name = "HL2 Music Player", detail = "43 tracks"}
 }
 local menuOptions = APPS
 local LAUNCHER_TOP, TILE_WIDTH, TILE_HEIGHT = 132, 232, 84
@@ -197,6 +317,117 @@ local function label(x, y, value, color, face)
 end
 
 local offline = {}
+offline.player = {
+    music = {
+        {"CP Violation", "HL2_song20_submix0.mp3"},
+        {"Triage at Dawn", "HL2_song23_SuitSong3.mp3"},
+        {"Apprehension and Evasion", "HL2_song29.mp3"},
+        {"Particle Ghost", "HL2_song1.mp3"},
+        {"The Innsbruck Experiment", "HL2_song4.mp3"},
+        {"Broken Symmetry", "HL2_song17.mp3"},
+        {"Brane Scan", "HL2_song31.mp3"},
+        {"Dark Energy", "HL2_song3.mp3"},
+        {"Pulse Phase", "HL2_song6.mp3"},
+        {"Ravenholm Reprise", "HL2_song7.mp3"},
+        {"Probably Not a Problem", "HL2_song33.mp3"},
+        {"Calabi-Yau Model", "HL2_song30.mp3"},
+        {"Slow Light", "HL2_song32.mp3"},
+        {"Our Resurrected Teleport", "HL2_song26.mp3"},
+        {"Lab Practicum", "HL2_song2.mp3"},
+        {"Nova Prospekt", "HL2_song19.mp3"},
+        {"LG Orbifold", "HL2_song16.mp3"},
+        {"Kaon", "HL2_song15.mp3"},
+        {"You're Not Supposed to Be Here", "HL2_song14.mp3"},
+        {"Suppression Field", "HL2_song13.mp3"},
+        {"Eine Kleiner Elevatormuzik", "VLVX_song1.mp3", "Episode One"},
+        {"Combine Advisory", "VLVX_song2.mp3", "Episode One"},
+        {"Guard Down", "VLVX_song4.mp3", "Episode One"},
+        {"Darkness at Noon", "VLVX_song8.mp3", "Episode One"},
+        {"Disrupted Original", "VLVX_song11.mp3", "Episode One"},
+        {"Self Destruction", "VLVX_song12.mp3", "Episode One"},
+        {"What Kind of Hospital Is This?", "VLVX_song18.mp3", "Episode One"},
+        {"Infraradiant", "VLVX_song19a.mp3", "Episode One"},
+        {"Decay Mode", "VLVX_song19b.mp3", "Episode One"},
+        {"Penultimatum", "VLVX_song21.mp3", "Episode One"},
+        {"No One Rides for Free", "VLVX_song0.mp3", "Episode Two"},
+        {"Dark Interval", "VLVX_song3.mp3", "Episode Two"},
+        {"Crawl Yard", "VLVX_song9.mp3", "Episode Two"},
+        {"Nectarium", "VLVX_song15.mp3", "Episode Two"},
+        {"Extinction Event Horizon", "VLVX_song20.mp3", "Episode Two"},
+        {"Vortal Combat", "VLVX_song22.mp3", "Episode Two"},
+        {"Sector Sweep", "VLVX_song23.mp3", "Episode Two"},
+        {"Shu'ulathoi", "VLVX_song23ambient.mp3", "Episode Two"},
+        {"Last Legs", "VLVX_song24.mp3", "Episode Two"},
+        {"Abandoned in Place", "VLVX_song25.mp3", "Episode Two"},
+        {"Inhuman Frequency", "VLVX_song26.mp3", "Episode Two"},
+        {"Hunting Party", "VLVX_song27.mp3", "Episode Two"},
+        {"Eon Trap", "VLVX_song28.mp3", "Episode Two"}
+    },
+    top = 1, selected = 1
+}
+
+function offline.player.stop()
+    local app = offline.player
+    if app.sound then pcall(function() app.sound:destroy() end) end
+    app.sound, app.message = nil, nil
+end
+
+function offline.player.play()
+    local app = offline.player
+    local track = app.music[app.selected]
+    app.stop()
+    local ok = pcall(function()
+        app.sound = sound.create(player(), "music/" .. track[2])
+        app.sound:setSoundLevel(0)
+        app.sound:play()
+        app.sound:setVolume(0.5)
+    end)
+    if not ok then
+        app.stop()
+        app.message = "Playback unavailable. Check sound permission."
+    else
+        app.message = "Playing " .. track[1]
+    end
+end
+
+function offline.player.move(delta)
+    local app = offline.player
+    app.selected = math.max(1, math.min(#app.music, app.selected + delta))
+    app.top = math.max(app.selected - 3, math.min(app.top, app.selected))
+end
+
+function offline.player.click(x, y)
+    local app = offline.player
+    if y >= 400 and y < 446 then
+        if x < 170 then app.stop()
+        elseif x < 333 then app.move(-4)
+        else app.move(4) end
+    elseif y >= 94 and y < 394 and (y - 94) % 75 < 64 then
+        local index = app.top + math.floor((y - 94) / 75)
+        if app.music[index] then
+            app.selected = index
+            app.play()
+        end
+    end
+end
+
+function offline.player.draw()
+    local app = offline.player
+    for i = app.top, math.min(app.top + 3, #app.music) do
+        local track = app.music[i]
+        local y = 94 + (i - app.top) * 75
+        render.setColor(panel)
+        render.drawRect(16, y, 480, 64)
+        label(27, y + 9, track[1], i == app.selected and accent or ink)
+        label(27, y + 34, track[3] or "Half-Life 2", muted, smallFont)
+    end
+    label(27, 412, "Stop", accent)
+    label(181, 412, "< Prev page", accent)
+    label(345, 412, "Next page >", accent)
+    if app.message then label(22, 451, app.message, muted, smallFont) end
+    label(22, 487, "Arrows select | PgUp/PgDn scrolls | Enter plays | Space stops", muted, smallFont)
+end
+
 
 offline.squadron = {}
 
@@ -663,7 +894,9 @@ local function calculatorInput(key)
         end
         if state.operator then
             if state.operator == "/" and number == 0 then
-                state.entry, state.left, state.operator, state.error = "", nil, nil, "Cannot divide by zero."
+                state.entry, state.left, state.operator, state.error, state.result = "", nil, nil, nil, false
+                gameTab = "menu"
+                startupUntil = timer.curtime() + 2.5 + STARTUP_DURATION
                 return
             end
             if state.operator == "+" then number = state.left + number
@@ -1009,6 +1242,1491 @@ local function renderCalculator()
     label(22, 483, hint, muted, smallFont)
 end
 
+-- Integrated from starfall_wolfenstein.txt.
+offline.freeMan = (function()
+    local game = {}
+    local previous, pendingPress, heldUntil = {}, {}, {}
+    local movement = {
+        [17]="Forward", [18]="Backward", [19]="TurnLeft", [20]="TurnRight",
+        [119]="Forward", [115]="Backward", [97]="StrafeLeft", [100]="StrafeRight", [32]="Fire"
+    }
+    local commands = {
+        [101]="Use", [109]="Menu", [114]="Restart", [116]="Automap", [9]="Automap",
+        [49]="Slot1", [50]="Slot2", [51]="Slot3", [52]="Slot4",
+        [53]="Slot5", [54]="Slot6", [55]="Slot7"
+    }
+    function game.key(key, enter)
+        if key >= 65 and key <= 90 then key = key + 32 end
+        local action = enter and "Use" or commands[key]
+        if action then pendingPress[action] = true end
+        local direction = movement[key]
+        if direction then heldUntil[direction] = timer.curtime() + 0.12 end
+    end
+    local function down(action)
+        return (heldUntil[action] or 0) > timer.curtime()
+    end
+
+    -- Run state and equipment
+    local SIZE
+    local RAYS, WIDTH, VIEW = 96, 512, 450
+    local STEP = WIDTH / RAYS
+    local grid, doors, actors, enemies, pickups, projectiles
+    local gibs
+    local crates, crateCells
+    local coverCells, routeField, routeOrigin
+    local soundField, navigationRevision, doorRevision
+    local px, py, yaw, health, seed, remaining, exitX, exitY, won
+    local map, shot, lastTime = false, 0, nil
+    local menu, gameTime, spottedUntil = "title", 0, 0
+    local nextVoiceAt = 0
+    local floorNumber, armor, maxHealth, damageBoost, speedBoost, fireRate, supplyBoost
+    local ammo, owned, selected, hasKey, choices, message, messageUntil, boss
+    local abs, floor, min, max = math.abs, math.floor, math.min, math.max
+    local menuSeed = floor(timer.systime()*1000000)%2147483646+1
+    local weapons = {
+        {name="Crowbar", damage=34, delay=0.32, range=0.9,
+            sound="weapons/crowbar/crowbar_impact1.wav", width=13, height=62},
+        {name="Pistol", damage=27, delay=0.25, ammo=1, noise=9,
+            sound="weapons/pistol/pistol_fire2.wav", width=30, height=46},
+        {name="SMG", damage=17, delay=0.085, ammo=1, noise=11,
+            sound="weapons/smg1/smg1_fire1.wav", width=40, height=52},
+        {name="Shotgun", damage=19, delay=0.58, ammo=2, noise=13,
+            sound="weapons/shotgun/shotgun_fire6.wav", width=51, height=61},
+        {name="Rocket Launcher", damage=110, delay=0.73, ammo=3, noise=15,
+            sound="weapons/rpg/rocketfire1.wav", width=68, height=62},
+        {name="Pulse Rifle", damage=33, delay=0.14, ammo=4, noise=12,
+            sound="weapons/ar2/fire1.wav", width=55, height=58},
+        {name="Crossbow", damage=125, delay=1.05, ammo=5, noise=4,
+            sound="weapons/crossbow/fire1.wav", width=50, height=51},
+    }
+    local ammoTypes = {
+        {name="Bullets", box=28, cap=240, starter=36},
+        {name="Shells", box=10, cap=90, starter=16},
+        {name="Rockets", box=4, cap=45, starter=7},
+        {name="Cells", box=16, cap=150, starter=30},
+        {name="Bolts", box=5, cap=35, starter=8},
+    }
+    -- Name, HP, speed, attack mode, range, damage, recovery, armor color.
+    local roster = {
+        {"Stunstick Metrocop", 42, 1.35, "melee", 0.7, 7, 0.85, "J"},
+        {"Pistol Metrocop",    48, 0.90, "scan",  4.7, 8, 1.40, "J"},
+        {"SMG Metrocop",       55, 1.02, "burst", 4.8, 5, 1.65, "J"},
+        {"Stunstick Soldier", 90, 1.52, "melee", 0.8, 13, 0.90, "M"},
+        {"SMG Soldier",      100, 0.95, "burst", 5.4, 7, 1.45, "M"},
+        {"Pulse Rifle Soldier", 108, 0.95, "scan", 6.5, 16, 1.25, "H"},
+        {"Red Shotgun Soldier", 118, 1.13, "scan", 3.0, 24, 1.55, "G"},
+        {"Combine Assassin", 105, 2.10, "burst", 6.8, 10, 1.00, "T"},
+        {"Combine Elite",    170, 0.84, "elite", 9.0, 19, 1.35, "Q"},
+        {"Mecha Breen",      680, 0.80, "boss",  9.5, 24, 1.50, "H"},
+    }
+    local perks = {
+        {"Vitality", "+20 max HP and heal 30", function() maxHealth=maxHealth+20; health=min(maxHealth,health+30) end},
+        {"Ballistics", "+15% weapon damage", function() damageBoost=damageBoost+0.15 end},
+        {"Quick Hands", "+12% fire rate", function() fireRate=fireRate+0.12 end},
+        {"Runner", "+10% movement speed", function() speedBoost=speedBoost+0.1 end},
+        {"Field Armor", "Heal 15, +50 armor at full HP", function()
+            health=min(maxHealth,health+15)
+            if health==maxHealth then armor=min(150,armor+50) end
+        end},
+        {"Scavenger", "+20% ammo from pickups", function() supplyBoost=supplyBoost+0.2 end},
+    }
+    local enemySounds = {
+        "weapons/stunstick/stunstick_fleshhit1.wav", weapons[2].sound, weapons[3].sound,
+        "weapons/stunstick/stunstick_fleshhit2.wav", weapons[3].sound, weapons[6].sound,
+        weapons[4].sound, weapons[3].sound, weapons[6].sound, "weapons/ar2/npc_ar2_altfire.wav",
+    }
+    local metroAlerts = {
+        "npc/metropolice/vo/acquiringonvisual.wav",
+        "npc/metropolice/vo/gotsuspect1here.wav",
+        "npc/metropolice/vo/contactwith243suspect.wav",
+    }
+    local soldierAlerts = {
+        "npc/combine_soldier/vo/contact.wav",
+        "npc/combine_soldier/vo/contactconfirmprosecuting.wav",
+        "npc/combine_soldier/vo/engaging.wav",
+    }
+    local breenAlert = "vo/citadel/br_freemanatlast.wav"
+    local explosionSounds = {"weapons/explode3.wav", "weapons/explode4.wav", "weapons/explode5.wav"}
+    local pickupSounds = {
+        key="buttons/button14.wav", weapon="items/ammocrate_open.wav", health="items/smallmedkit1.wav",
+        armor="items/battery_pickup.wav", ammo="items/ammo_pickup.wav",
+    }
+    local soundSlots = 6
+    local function effect(path, volume, pitch)
+        if soundSlots<=0 then return end
+        soundSlots=soundSlots-1
+        pcall(function() player():emitSound(path, 60, pitch or 100, volume or 0.55) end)
+    end
+
+    local function explosionSound(volume)
+        effect(explosionSounds[math.random(#explosionSounds)],volume)
+    end
+
+    -- Stock Half-Life 2 chase and combat cues only.
+    local combatTracks = {
+        {"music/HL2_song20_submix0.mp3", 105}, -- CP Violation
+        {"music/HL2_song29.mp3", 138},        -- Apprehension and Evasion
+        {"music/HL2_song16.mp3", 172},        -- LG Orbifold
+    }
+    local music, nextMusic, trackIndex, musicWanted
+    local function stopMusic()
+        if music then
+            pcall(function() music:stop() end)
+            if music.destroy then pcall(function() music:destroy() end) end
+        end
+        music, nextMusic = nil, nil
+    end
+    local function updateMusic(now)
+        if not musicWanted or (nextMusic and now<nextMusic) then return end
+        stopMusic()
+        local cue=combatTracks[trackIndex]
+        local ok=pcall(function()
+            music=sound.create(player(),cue[1])
+            music:setSoundLevel(0)
+            music:play()
+            music:setVolume(0.27)
+        end)
+        if ok then
+            local hasDuration, duration=pcall(function() return sound.duration(cue[1]) end)
+            nextMusic=now+(hasDuration and duration>1 and duration or cue[2])
+            trackIndex=trackIndex%#combatTracks+1
+        else
+            stopMusic()
+            nextMusic=now+8
+        end
+    end
+    function game.pause()
+        lastTime = nil
+        previous, pendingPress, heldUntil = {}, {}, {}
+        stopMusic()
+        nextMusic = nil
+    end
+
+    local function addPickup(kind, x, y, value)
+        local cell = floor(y)*SIZE+floor(x)
+        local item = {kind=kind, x=x, y=y, value=value, sealed=true}
+        local crate = {kind="supply", x=x, y=y, hp=25, item=item, cell=cell}
+        pickups[#pickups+1], actors[#actors+1] = item, item
+        crates[#crates+1], actors[#actors+1], crateCells[cell] = crate, crate, crate
+    end
+    local function giveAmmo(kind, amount)
+        local cap = ammoTypes[kind].cap
+        local before = ammo[kind]
+        ammo[kind] = min(cap, before+amount)
+        return ammo[kind] > before
+    end
+    local function notice(text)
+        message, messageUntil = text, gameTime+2.5
+    end
+    -- Map generation
+    local directions = {{1,0}, {-1,0}, {0,1}, {0,-1}}
+    local slotActions, slotKeys = {}, {}
+    for slot = 1, #weapons do
+        slotActions[slot] = "Slot" .. slot
+        slotKeys[slot] = KEY[tostring(slot)]
+    end
+    local function index(x, y) return y * SIZE + x end
+    local function tile(x, y)
+        if x < 0 or y < 0 or x >= SIZE or y >= SIZE then return 1 end
+        return grid[index(x, y)]
+    end
+
+    local function openCourtyards(random)
+        -- Merge four adjacent rooms while keeping the starting room protected.
+        local claimed = {[index(2,2)]=true}
+        local function carve(x,y)
+            local a,b,c,d=index(x,y),index(x+4,y),index(x,y+4),index(x+4,y+4)
+            if claimed[a] or claimed[b] or claimed[c] or claimed[d] then return false end
+            claimed[a],claimed[b],claimed[c],claimed[d]=true,true,true,true
+            for gy=y-1,y+5 do
+                for gx=x-1,x+5 do
+                    local cell=index(gx,gy)
+                    grid[cell],doors[cell]=0,nil
+                end
+            end
+            return true
+        end
+
+        local count=0
+        if floorNumber%5==0 then
+            local x,y=min(floor(exitX),SIZE-7),min(floor(exitY),SIZE-7)
+            if carve(x,y) then count=1 end
+        end
+        local sites={}
+        local roomSide=(SIZE-1)/4
+        local startX=roomSide%2==0 and 2 or 2+(random(2)-1)*4
+        local startY=roomSide%2==0 and 2 or 2+(random(2)-1)*4
+        for y=startY,SIZE-7,8 do
+            for x=startX,SIZE-7,8 do
+                sites[#sites+1]={x,y}
+            end
+        end
+        local target=1+floor(roomSide*roomSide/12)
+        for i=#sites,1,-1 do
+            if count>=target then break end
+            local j=random(i)
+            local site=sites[j]
+            sites[j]=sites[i]
+            local x,y=site[1],site[2]
+            if carve(x,y) then
+                count=count+1
+                -- Both ends of the waist-high barrier have room to pass.
+                grid[index(x+2,y+2)],grid[index(x+3,y+2)]=3,3
+            end
+        end
+    end
+
+    local function addDoorCover(random)
+        local placed=false
+        for y=1,SIZE-3 do
+            for x=1,SIZE-3 do
+                if tile(x,y)==2 and tile(x+1,y+1)==0 and (not placed or random(3)==1) then
+                    grid[index(x+1,y+1)],placed=3,true
+                end
+            end
+        end
+    end
+
+    local function markCover()
+        coverCells={}
+        for y=1,SIZE-2 do
+            for x=1,SIZE-2 do
+                if tile(x,y)==3 then
+                    for _,dir in ipairs(directions) do
+                        local cx,cy=x+dir[1],y+dir[2]
+                        if tile(cx,cy)==0 then coverCells[index(cx,cy)]=true end
+                    end
+                end
+            end
+        end
+    end
+
+    local function generate(value)
+        stopMusic()
+        trackIndex = floorNumber%5==0 and 3 or (floorNumber-1)%#combatTracks+1
+        seed = value
+        spottedUntil,nextVoiceAt=0,0
+        SIZE = 17 + min(6, floor((floorNumber-1)/2))*4
+        hasKey, choices, message, boss = false, nil, nil, nil
+        local randomState = seed
+        local function random(n)
+            randomState = randomState * 48271 % 2147483647
+            return randomState % n + 1
+        end
+        grid, doors, actors, enemies, pickups, projectiles = {}, {}, {}, {}, {}, {}
+        gibs = {}
+        crates, crateCells = {}, {}
+        routeField,routeOrigin=nil,nil
+        soundField,navigationRevision,doorRevision=nil,0,0
+        for i = 0, SIZE * SIZE - 1 do grid[i] = 1 end
+        local visited, stack = {}, {}
+        local function visit(x, y)
+            visited[index(x,y)] = true
+            stack[#stack + 1] = {x, y}
+            for dy = -1, 1 do
+                for dx = -1, 1 do grid[index(x + dx, y + dy)] = 0 end
+            end
+        end
+        visit(2, 2)
+        local farthest = 0
+        while #stack > 0 do
+            local room = stack[#stack]
+            local x, y = room[1], room[2]
+            local options = {}
+            for _, dir in ipairs(directions) do
+                local nx, ny = x + dir[1] * 4, y + dir[2] * 4
+                if nx >= 2 and ny >= 2 and nx <= SIZE-3 and ny <= SIZE-3 and not visited[index(nx,ny)] then
+                    options[#options + 1] = dir
+                end
+            end
+            if #options == 0 then
+                stack[#stack] = nil
+            else
+                local dir = options[random(#options)]
+                local dx, dy = dir[1], dir[2]
+                local gate = index(x + dx * 2, y + dy * 2)
+                grid[gate] = 0
+                if #stack == 1 or random(3) == 1 then
+                    grid[gate] = 2
+                    doors[gate] = {open = 0, target = 0, slideX = dy ~= 0}
+                end
+                visit(x + dx * 4, y + dy * 4)
+                if #stack > farthest then
+                    farthest = #stack
+                    exitX, exitY = stack[#stack][1] + 0.5, stack[#stack][2] + 0.5
+                end
+            end
+        end
+        openCourtyards(random)
+        addDoorCover(random)
+        markCover()
+        local rooms = {}
+        for y = 2, SIZE-3, 4 do
+            for x = 2, SIZE-3, 4 do
+                if (x ~= 2 or y ~= 2) and (x+0.5 ~= exitX or y+0.5 ~= exitY) then
+                    rooms[#rooms+1] = {x=x, y=y}
+                end
+            end
+        end
+        for i = #rooms, 2, -1 do
+            local j = random(i)
+            rooms[i], rooms[j] = rooms[j], rooms[i]
+        end
+        local slot = 3+(floorNumber-1)%(#weapons-2)
+        for _, candidate in ipairs({3,4,6,5,7}) do
+            if not owned[candidate] then slot = candidate; break end
+        end
+        local keyRoom, armory = rooms[1], rooms[2]
+        addPickup("key", keyRoom.x+0.5, keyRoom.y+0.5)
+        addPickup("weapon", armory.x+0.5, armory.y+0.5, slot)
+        local function addEnemy(x,y,typeIndex)
+            local stats = roster[typeIndex]
+            local hp = stats[2]*(1+min(2,(floorNumber-1)*0.035))
+            local actor = {x=x,y=y,kind="guard",typeIndex=typeIndex,stats=stats,hp=hp,maxHp=hp,attack=0}
+            actors[#actors+1], enemies[#enemies+1] = actor, actor
+            return actor
+        end
+        local firstType = floorNumber>=4 and 4 or 1
+        local lastType = floorNumber>=7 and 7 or floorNumber>=4 and min(7,floorNumber+1) or 3
+        local enemyCount = min(42, #rooms-2, 5+floorNumber*2)
+        remaining = enemyCount
+        for i, room in ipairs(rooms) do
+            local x, y = room.x, room.y
+            if i >= 3 and i < 3+enemyCount then
+                local typeIndex = random(lastType-firstType+1)+firstType-1
+                if floorNumber>=7 then
+                    if (floorNumber==7 and i==3) or random(8)==1 then typeIndex=8 end
+                    if floorNumber>=8 and ((floorNumber==8 and i==4) or random(8)==1) then typeIndex=9 end
+                end
+                addEnemy(x+0.5,y+0.5,typeIndex)
+            end
+            if i <= 32 or i%4 == 0 then
+                actors[#actors+1] = {x=x-0.5, y=y-0.5, kind=random(2)==1 and "crate" or "barrel"}
+            end
+            local supply = i%4
+            if supply == 1 then addPickup("armor",x+1.5,y+1.5)
+            else addPickup("supplies",x+1.5,y+1.5) end
+        end
+        if floorNumber%5==0 then
+            boss=addEnemy(exitX,exitY,10)
+            remaining=remaining+1
+            actors[#actors+1]={x=exitX-1,y=exitY-1,kind="crate"}
+        end
+        actors[#actors+1] = {x=exitX, y=exitY+0.8, kind="exit"}
+        px, py, yaw, won, shot = 2.5, 2.5, 0, false, 0
+        if tile(4, 2) == 1 then yaw = math.pi/2 end
+    end
+
+    local function startRun(seedValue)
+        musicWanted=false
+        floorNumber, health, maxHealth, armor = 1, 100, 100, 0
+        damageBoost, speedBoost, fireRate, supplyBoost = 1, 1, 1, 1
+        ammo, owned, selected = {56,0,0,0,0}, {true,true}, 2
+        generate(seedValue)
+    end
+
+    -- Collision and ray traversal
+    -- DDA visits grid cells in depth order. A sliding door intersects at its center plane.
+    local function cast(x, y, dx, dy, view)
+        local gx, gy = floor(x), floor(y)
+        local sx, sy = dx < 0 and -1 or 1, dy < 0 and -1 or 1
+        local ix, iy = dx == 0 and math.huge or abs(1 / dx), dy == 0 and math.huge or abs(1 / dy)
+        local tx = (sx < 0 and x - gx or gx + 1 - x) * ix
+        local ty = (sy < 0 and y - gy or gy + 1 - y) * iy
+        if dx == 0 then tx = math.huge end
+        if dy == 0 then ty = math.huge end
+        local barrier, barrierU, barrierSide
+        while true do
+            local d, side
+            if tx < ty then
+                d, side, gx, tx = tx, 1, gx + sx, tx + ix
+            else
+                d, side, gy, ty = ty, 2, gy + sy, ty + iy
+            end
+            local cell = tile(gx, gy)
+            local u = side == 1 and y + d * dy or x + d * dx
+            if cell == 1 then return d, side, cell, u-floor(u), gx, gy, barrier, barrierU, barrierSide end
+            if cell == 3 and view and not barrier then barrier,barrierU,barrierSide=d,u-floor(u),side end
+            if cell == 2 then
+                local door = doors[index(gx,gy)]
+                local normal = door.slideX and dy or dx
+                if normal ~= 0 and door.open < 1 then
+                    local plane = door.slideX and (gy + 0.5 - y) or (gx + 0.5 - x)
+                    local depth = plane / normal
+                    local slide = door.slideX and (x + depth * dx - gx) or (y + depth * dy - gy)
+                    if depth >= d and depth <= min(tx, ty) and slide >= door.open and slide <= 1 then
+                        return depth, door.slideX and 2 or 1, cell, slide-door.open, gx, gy, barrier, barrierU, barrierSide
+                    end
+                end
+            end
+        end
+    end
+
+    local function clear(x, y)
+        local r = 0.19
+        for gy = floor(y-r), floor(y+r) do
+            for gx = floor(x-r), floor(x+r) do
+                local t = tile(gx,gy)
+                if t == 1 or t == 3 or (t == 2 and doors[index(gx,gy)].open < 1) then return false end
+                local crate=crateCells[index(gx,gy)]
+                if crate and abs(x-crate.x)<r+0.28 and abs(y-crate.y)<r+0.28 then return false end
+            end
+        end
+        return true
+    end
+
+    local function useDoor(dx, dy)
+        for i = 1, 12 do
+            local x, y = floor(px + dx * i * 0.125), floor(py + dy * i * 0.125)
+            local t = tile(x, y)
+            if t == 1 or t == 3 then return end
+            if t == 2 then
+                local door = doors[index(x,y)]
+                if door.target == 0 then
+                    door.target = 1
+                    effect("doors/door_metal_medium_open1.wav")
+                else
+                    if abs(px-x-0.5) < 0.72 and abs(py-y-0.5) < 0.72 then return end
+                    for _, actor in ipairs(enemies) do
+                        if actor.hp > 0 and abs(actor.x-x-0.5) < 0.72 and abs(actor.y-y-0.5) < 0.72 then return end
+                    end
+                    door.target = 0
+                    effect("doors/door_metal_medium_close1.wav")
+                end
+                return
+            end
+        end
+    end
+
+    -- Damage, pickups, and projectiles
+    local function hurt(damage)
+        local absorbed = min(armor, floor(damage*0.6))
+        armor, health = armor-absorbed, max(0,health-(damage-absorbed))
+    end
+
+    local function chooseSupplies(item)
+        if item.kind=="armor" then
+            if health<maxHealth then item.kind="health"; return end
+            if armor<150 then return end
+        elseif item.kind~="supplies" then
+            return
+        end
+        local need, ammoKind=math.huge,1
+        for i,w in ipairs(weapons) do
+            if owned[i] and w.ammo then
+                local kind=w.ammo
+                local score=ammo[kind]/ammoTypes[kind].box-(i==selected and 0.35 or 0)
+                if score<need then need,ammoKind=score,kind end
+            end
+        end
+        if health<=min(45,maxHealth-20) or (maxHealth-health>=30 and need>=0.75) then
+            item.kind="health"
+        else
+            item.kind,item.value="ammo",ammoKind
+        end
+    end
+
+    local function gibEnemy(actor)
+        actor.gibbed=true
+        local kind=actor.typeIndex==10 and "scrap" or "gib"
+        for i=1,5 do
+            if #gibs>=32 then break end
+            local angle=math.random()*math.pi*2
+            local speed=0.7+math.random()*1.5
+            gibs[#gibs+1]={kind=kind,x=actor.x,y=actor.y,lift=0.3,
+                dx=math.cos(angle)*speed,dy=math.sin(angle)*speed,dz=1.1+math.random()*1.4,life=2.3}
+        end
+    end
+
+    local function updateGibs(dt)
+        for i=#gibs,1,-1 do
+            local gib=gibs[i]
+            gib.life=gib.life-dt
+            if gib.life<=0 then
+                table.remove(gibs,i)
+            else
+                local x,y=gib.x+gib.dx*dt,gib.y+gib.dy*dt
+                if clear(x,y) then
+                    gib.x,gib.y=x,y
+                else
+                    gib.dx,gib.dy=-gib.dx*0.32,-gib.dy*0.32
+                end
+                gib.dz=gib.dz-8*dt
+                gib.lift=max(0,gib.lift+gib.dz*dt)
+                if gib.lift==0 then
+                    gib.dz=max(0,-gib.dz*0.27-0.13)
+                    gib.dx,gib.dy=gib.dx*0.70,gib.dy*0.70
+                end
+            end
+        end
+    end
+
+    local function hit(actor, damage, rocket)
+        actor.hp = actor.hp-damage
+        if actor.hp <= 0 then
+            if actor.kind=="supply" then
+                crateCells[actor.cell]=nil
+                routeField=nil
+                navigationRevision=navigationRevision+1
+                chooseSupplies(actor.item)
+                actor.item.sealed=false
+                effect("physics/wood/wood_box_break1.wav",0.55)
+                return
+            end
+            remaining=remaining-1
+            if rocket then gibEnemy(actor) end
+            local kind=actor.typeIndex or 1
+            if kind==10 then explosionSound(0.37)
+            else effect(kind<=3 and "npc/metropolice/die1.wav" or "npc/combine_soldier/die1.wav",0.37) end
+        end
+    end
+
+    local function targetAt(x, y, dx, dy, range, radius)
+        local wall,_,_,_,_,_,barrier=cast(x,y,dx,dy,true)
+        local nearest, target=min(range,wall),nil
+        for kind=1,2 do
+            local list=kind==1 and enemies or crates
+            for _, actor in ipairs(list) do
+                if actor.hp > 0 then
+                    local ax, ay = actor.x-x, actor.y-y
+                    local depth = ax*dx+ay*dy
+                    if depth>0 and depth<nearest and abs(ax*dy-ay*dx)<radius
+                        and not (actor.ducking and barrier and barrier<depth) then
+                        nearest, target = depth, actor
+                    end
+                end
+            end
+        end
+        return target
+    end
+
+    local function launch(x,y,dx,dy,speed,damage,friendly,blast,kind)
+        if #projectiles >= 24 then return false end
+        projectiles[#projectiles+1] = {x=x,y=y,dx=dx,dy=dy,speed=speed,damage=damage,
+            friendly=friendly,blast=blast,kind=kind or (friendly and "rocket" or blast and "orb" or "bolt"),life=3}
+        return true
+    end
+
+    local function fire(dx, dy, now)
+        local w = weapons[selected]
+        if w.ammo and ammo[w.ammo] == 0 then
+            shot = now+0.25
+            notice("Out of ammo")
+            effect("weapons/ar2/ar2_empty.wav",0.38)
+            return
+        end
+        local damage = w.damage*damageBoost
+        local cue=w.sound
+        if selected == 5 then
+            if not launch(px,py,dx,dy,7,damage,true,true) then return end
+        elseif selected == 7 then
+            if not launch(px,py,dx,dy,12,damage,true,false,"crossbowBolt") then return end
+        elseif selected == 4 then
+            for i = -2, 2 do
+                local angle = yaw+i*0.078
+                local target = targetAt(px,py,math.cos(angle),math.sin(angle),9,0.26)
+                if target then hit(target,damage) end
+            end
+        else
+            local target = targetAt(px,py,dx,dy,w.range or 18,0.29)
+            if target then hit(target,damage)
+            elseif selected==1 then cue="weapons/iceaxe/iceaxe_swing1.wav" end
+        end
+        effect(cue,0.62)
+        if w.ammo then ammo[w.ammo] = ammo[w.ammo]-1 end
+        shot = now+w.delay/fireRate
+        return w.noise
+    end
+
+    local function explodeRocket(p,target)
+        explosionSound(0.56)
+        for kind=1,2 do
+            local list=kind==1 and enemies or crates
+            for _, actor in ipairs(list) do
+                local ax, ay = actor.x-p.x, actor.y-p.y
+                local range = ax*ax+ay*ay
+                if (actor.hp>0 or (actor.kind=="guard" and not actor.gibbed))
+                    and (actor==target or (range<2.25 and (range<0.001 or cast(p.x,p.y,ax,ay)>=1))) then
+                    if actor.hp>0 then
+                        hit(actor,actor==target and p.damage or p.damage*(1-math.sqrt(range)/1.65),true)
+                    else
+                        gibEnemy(actor)
+                    end
+                end
+            end
+        end
+    end
+
+    local function pierceTargets(p,distance,barrier)
+        p.hit=p.hit or {}
+        for kind=1,2 do
+            local list=kind==1 and enemies or crates
+            for _,actor in ipairs(list) do
+                if actor.hp>0 and not p.hit[actor] then
+                    local dx,dy=actor.x-p.x,actor.y-p.y
+                    local depth=dx*p.dx+dy*p.dy
+                    local covered=p.crossedBarrier or (barrier and barrier<depth)
+                    if depth>=0 and depth<=distance and abs(dx*p.dy-dy*p.dx)<0.31
+                        and not (actor.ducking and covered) then
+                        p.hit[actor]=true
+                        hit(actor,p.damage)
+                        effect(kind==1 and "weapons/crossbow/hitbod1.wav" or "weapons/crossbow/hit1.wav",0.58)
+                    end
+                end
+            end
+        end
+        if barrier and barrier<=distance then p.crossedBarrier=true end
+    end
+
+    local function updateProjectiles(dt)
+        for i = #projectiles, 1, -1 do
+            local p = projectiles[i]
+            local travel = p.speed*dt
+            local piercing=p.kind=="crossbowBolt"
+            local wall,_,_,_,_,_,barrier = cast(p.x,p.y,p.dx,p.dy,piercing or not p.friendly)
+            if barrier and not p.friendly then wall=min(wall,barrier) end
+            local distance = min(travel,max(0,wall-0.01))
+            local target
+            if piercing then
+                pierceTargets(p,distance,barrier)
+            elseif p.friendly then
+                target=targetAt(p.x,p.y,p.dx,p.dy,travel+0.13,0.31)
+            end
+            p.x, p.y, p.life = p.x+p.dx*distance, p.y+p.dy*distance, p.life-dt
+            local nearPlayer = (px-p.x)^2+(py-p.y)^2
+            local collision = wall <= travel or target or (not p.friendly and nearPlayer < 0.11)
+            if collision or p.life <= 0 then
+                if piercing then
+                    if collision then effect("weapons/crossbow/hit1.wav",0.52) end
+                elseif p.friendly then
+                    explodeRocket(p,target)
+                else
+                    if p.blast then explosionSound(0.5) end
+                    if nearPlayer<0.11 then
+                        hurt(p.damage)
+                    elseif p.blast and nearPlayer<0.8 then
+                        local depth,_,_,_,_,_,cover=cast(p.x,p.y,px-p.x,py-p.y,true)
+                        if depth>=1 and (not cover or cover>=1) then hurt(p.damage) end
+                    end
+                end
+                table.remove(projectiles,i)
+            end
+        end
+    end
+
+    local function collect()
+        for _, item in ipairs(pickups) do
+            if not item.taken and not item.sealed and abs(px-item.x) < 0.43 and abs(py-item.y) < 0.43 then
+                local kind = item.kind
+                if kind == "key" then hasKey=true; notice("Exit keycard acquired")
+                elseif kind == "weapon" then
+                    local w = weapons[item.value]
+                    owned[item.value], selected = true, item.value
+                    giveAmmo(w.ammo,ammoTypes[w.ammo].starter)
+                    notice(w.name)
+                elseif kind == "health" and health < maxHealth then health=min(maxHealth,health+30); notice("+ Health")
+                elseif kind == "armor" and health==maxHealth and armor < 150 then armor=min(150,armor+30); notice("Suit battery +30 armor")
+                elseif kind == "ammo" then
+                    local k=item.value
+                    local box=ammoTypes[k].box
+                    if giveAmmo(k,floor(box*supplyBoost)) then notice("+ Ammo"); item.taken=true; effect(pickupSounds.ammo) end
+                    kind=nil
+                else kind=nil end
+                if kind then item.taken=true; effect(pickupSounds[kind]) end
+            end
+        end
+    end
+
+    -- Enemy movement, hearing, and attacks
+    local function enemyShot(actor, now, cue, volume, pitch)
+        actor.flashUntil=now+0.085
+        effect(cue,volume,pitch)
+    end
+
+    local function enemyHitscan(damage, covered)
+        if not covered or math.random(3)==1 then hurt(damage) end
+    end
+
+    local function moveEnemy(actor,x,y,distance)
+        local dx,dy=x-actor.x,y-actor.y
+        local length=math.sqrt(dx*dx+dy*dy)
+        if length<0.001 then return false end
+        local step=min(1,distance/length)
+        local beforeX,beforeY=actor.x,actor.y
+        local nx,ny=beforeX+dx*step,beforeY+dy*step
+        if clear(nx,beforeY) then actor.x=nx end
+        if clear(actor.x,ny) then actor.y=ny end
+        return actor.x~=beforeX or actor.y~=beforeY
+    end
+
+    local function buildRoute(goal, limit, hearing)
+        local field,queue={[goal]=goal},{goal}
+        local i,edge,depth=1,1,0
+        while i<=#queue and (not limit or depth<limit) do
+            local cell=queue[i]
+            local x,y=cell%SIZE,floor(cell/SIZE)
+            for _,dir in ipairs(directions) do
+                local neighbor=index(x+dir[1],y+dir[2])
+                local kind=grid[neighbor]
+                if not field[neighbor] and (hearing or not crateCells[neighbor]) then
+                    if kind==0 or (kind==2 and doors[neighbor].open==1) or (hearing and kind==3) then
+                        field[neighbor]=cell
+                        queue[#queue+1]=neighbor
+                    end
+                end
+            end
+            if i==edge then edge,depth=#queue,depth+1 end
+            i=i+1
+        end
+        return field
+    end
+
+    local function hearGunshot(radius,now)
+        local goal=index(floor(px),floor(py))
+        if not soundField or soundField.goal~=goal or soundField.radius~=radius or soundField.doors~=doorRevision then
+            soundField={goal=goal,radius=radius,doors=doorRevision,audible=buildRoute(goal,radius,true)}
+        end
+        soundField.x,soundField.y=px,py
+        for _,actor in ipairs(enemies) do
+            if actor.hp>0 and soundField.audible[index(floor(actor.x),floor(actor.y))] then
+                actor.heard,actor.heardUntil=soundField,now+15
+            end
+        end
+    end
+
+    local function stepRoute(actor, field, goal, gx, gy, distance)
+        local x,y=floor(actor.x),floor(actor.y)
+        local cell=index(x,y)
+        local nextCell=field[cell]
+        if not nextCell then return end
+        if cell==goal then moveEnemy(actor,gx,gy,distance); return end
+        local nx,ny=nextCell%SIZE+0.5,floor(nextCell/SIZE)+0.5
+        if nx~=x+0.5 and abs(actor.y-(y+0.5))>0.20 then nx=actor.x
+        elseif ny~=y+0.5 and abs(actor.x-(x+0.5))>0.20 then ny=actor.y end
+        moveEnemy(actor,nx,ny,distance)
+    end
+
+    local function followRoute(actor, distance)
+        local goal=index(floor(px),floor(py))
+        if not routeField or routeOrigin~=goal then
+            routeField,routeOrigin=buildRoute(goal),goal
+        end
+        stepRoute(actor,routeField,goal,px,py,distance)
+    end
+
+    local function investigate(actor, distance, now)
+        local heard=actor.heard
+        if not heard then return false end
+        if now>=actor.heardUntil or (actor.x-heard.x)^2+(actor.y-heard.y)^2<0.08 then
+            actor.heard=nil
+            return false
+        end
+        if not heard.route or heard.revision~=navigationRevision then
+            heard.route=buildRoute(heard.goal,heard.radius+8)
+            heard.revision=navigationRevision
+        end
+        stepRoute(actor,heard.route,heard.goal,heard.x,heard.y,distance)
+        return true
+    end
+
+    local function findCover(actor, range)
+        local ax,ay=actor.x,actor.y
+        local startX,startY=floor(ax),floor(ay)
+        local best=8
+        for y=max(1,startY-2),min(SIZE-2,startY+2) do
+            for x=max(1,startX-2),min(SIZE-2,startX+2) do
+                if coverCells[index(x,y)] then
+                    local cx,cy=x+0.5,y+0.5
+                    local dx,dy=cx-ax,cy-ay
+                    local distance=dx*dx+dy*dy
+                    local gx,gy=px-cx,py-cy
+                    if distance>0.04 and distance<best and gx*gx+gy*gy<range*range and clear(cx,cy)
+                        and clear(ax+dx*0.5,ay+dy*0.5) then
+                        local route,_,_,_,_,_,obstacle=cast(ax,ay,dx,dy,true)
+                        if route>1 and (not obstacle or obstacle>1) then
+                            local sight,_,_,_,_,_,barrier=cast(cx,cy,gx,gy,true)
+                            if sight>1 and barrier and barrier<1 then
+                                actor.coverX,actor.coverY=cx,cy
+                                best=distance
+                            end
+                        end
+                    end
+                end
+            end
+        end
+    end
+
+    local function updateEnemies(dt,now)
+        for _, actor in ipairs(enemies) do
+            if actor.hp > 0 then
+                local stats=actor.stats
+                local gx, gy = px-actor.x, py-actor.y
+                local squared = gx*gx+gy*gy
+                local mode=stats[4]
+                local range=stats[5]
+                local enraged=mode=="boss" and actor.hp<=actor.maxHp*0.5
+                actor.ducking=false
+                local sight,cover = 0,nil
+                if squared<max(64,range*range) and squared>0.001 then
+                    local depth,_,_,_,_,_,barrier=cast(actor.x,actor.y,gx,gy,true)
+                    sight,cover=depth,barrier
+                end
+                if sight>1 then
+                    if not actor.lastSight or now-actor.lastSight>2 then
+                        actor.alertUntil=now+0.9
+                        actor.attack=max(actor.attack,actor.alertUntil)
+                        if now>=spottedUntil then spottedUntil=actor.alertUntil end
+                        actor.reportUntil=now+2.4
+                    end
+                    if actor.reportUntil then
+                        if now>=actor.reportUntil then
+                            actor.reportUntil=nil
+                        elseif now>=nextVoiceAt or (actor.typeIndex==10 and not actor.hasSpoken) then
+                            local lines=(actor.typeIndex or 1)<=3 and metroAlerts or soldierAlerts
+                            effect(actor.typeIndex==10 and breenAlert or lines[math.random(#lines)],0.76)
+                            nextVoiceAt,actor.hasSpoken,actor.reportUntil=now+1.05,true,nil
+                        end
+                    end
+                    actor.lastSight=now
+                    local d = math.sqrt(squared)
+                    local covered=cover and cover<1
+                    local inCover=covered and cover*d<=1.35
+                    local seek=mode~="melee" and mode~="boss"
+                    if mode=="melee" then actor.pursueUntil=now+5 end
+                    if inCover then actor.coverX=nil end
+                    if seek and not inCover and not actor.windup and not actor.burst
+                        and not actor.coverX and now>=(actor.checkCoverAt or 0) then
+                        actor.checkCoverAt=now+1.4
+                        findCover(actor,range)
+                        if actor.coverX then actor.coverUntil=now+3.5 end
+                    end
+                    if actor.coverX and now>=actor.coverUntil then actor.coverX=nil end
+                    if actor.coverX then
+                        if not moveEnemy(actor,actor.coverX,actor.coverY,dt*stats[3]) then actor.coverX=nil end
+                    elseif d <= range then
+                        if actor.burst and now>=actor.attack then
+                            enemyShot(actor,now,enemySounds[actor.typeIndex or 2],0.34)
+                            enemyHitscan(stats[6],covered)
+                            actor.burst=actor.burst-1
+                            actor.attack=now+(actor.burst>0 and 0.12 or stats[7])
+                            if actor.burst==0 then actor.burst=nil end
+                        elseif not actor.burst and not actor.windup and now >= actor.attack then
+                            actor.windup=now+(mode=="melee" and 0.27 or 0.42)
+                        elseif actor.windup and now >= actor.windup then
+                            actor.windup, actor.attack = nil, now+stats[7]
+                            local enemySound=enemySounds[actor.typeIndex or 2]
+                            if mode=="burst" then
+                                enemyShot(actor,now,enemySound,0.36)
+                                enemyHitscan(stats[6],covered)
+                                actor.burst, actor.attack=2, now+0.12
+                            elseif mode=="elite" then
+                                if d>=4 and math.random(3)==1 then
+                                    if launch(actor.x,actor.y,gx/d,gy/d,4.8,34,false,true) then
+                                        enemyShot(actor,now,"weapons/ar2/npc_ar2_altfire.wav",0.48)
+                                    end
+                                else
+                                    enemyShot(actor,now,enemySound,0.4)
+                                    enemyHitscan(stats[6],covered)
+                                end
+                            elseif mode=="boss" then
+                                local heading=math.atan2(gy,gx)
+                                local count=enraged and 2 or 1
+                                local fired=false
+                                for i=-count,count do
+                                    local angle=heading+i*0.14
+                                    if launch(actor.x,actor.y,math.cos(angle),math.sin(angle),4.2,stats[6],false,true) then fired=true end
+                                end
+                                if fired then enemyShot(actor,now,enemySound,0.62,80) end
+                                actor.attack=now+(enraged and 0.77 or stats[7])
+                            else
+                                if mode=="melee" then
+                                    effect(enemySound,0.45)
+                                    if not covered then hurt(stats[6]) end
+                                else
+                                    enemyShot(actor,now,enemySound,0.45)
+                                    enemyHitscan(stats[6],covered)
+                                end
+                            end
+                        end
+                    else
+                        actor.windup, actor.burst=nil,nil
+                        local dist=dt*stats[3]
+                        if mode=="melee" and (covered or not moveEnemy(actor,px,py,dist)) then
+                            followRoute(actor,dist)
+                        elseif mode~="melee" then
+                            moveEnemy(actor,px,py,dist)
+                        end
+                    end
+                    actor.ducking=seek and inCover and d<=range and not actor.windup and not actor.burst
+                        and now>=(actor.flashUntil or 0)
+                else
+                    actor.windup,actor.burst,actor.coverX=nil,nil,nil
+                    local checkingSound=investigate(actor,dt*stats[3],now)
+                    if not checkingSound and mode=="melee" and squared>0.001 and now<(actor.pursueUntil or 0) then
+                        followRoute(actor,dt*stats[3])
+                    end
+                end
+            end
+        end
+    end
+
+    -- Input and simulation
+    local function pollPress(action, key)
+        local held = down(action, key)
+        if held and not previous[action] then pendingPress[action]=true end
+        previous[action] = held
+    end
+
+    local function takePress(action)
+        local edge=pendingPress[action]
+        pendingPress[action]=nil
+        return edge
+    end
+
+    local muzzleUntil = 0
+    function game.update()
+        pollPress("Automap",KEY.TAB)
+        pollPress("Restart",KEY.R)
+        pollPress("Use",KEY.E)
+        pollPress("Menu",KEY.M)
+        for i=1,#slotActions do pollPress(slotActions[i],slotKeys[i]) end
+        local realtime=timer.curtime()
+        if lastTime and realtime-lastTime < 1/60 then return end
+        local dt=min(realtime-(lastTime or realtime),0.05)
+        lastTime=realtime
+        soundSlots=6
+        local use=takePress("Use")
+        local toggleMenu=takePress("Menu")
+        if menu then
+            takePress("Automap")
+            takePress("Restart")
+            for _,action in ipairs(slotActions) do takePress(action) end
+            if menu=="title" then
+                menuSeed=(menuSeed*48271+floor(timer.systime()*1000000)%2147483647)%2147483646+1
+                if use then
+                    startRun(menuSeed)
+                    menu,musicWanted=nil,true
+                    updateMusic(gameTime)
+                end
+            elseif use or toggleMenu then
+                menu=nil
+            end
+            return
+        end
+        if toggleMenu then
+            menu="pause"
+            if music then trackIndex=(trackIndex+#combatTracks-2)%#combatTracks+1 end
+            stopMusic()
+            return
+        end
+        gameTime=gameTime+dt
+        local now=gameTime
+        if takePress("Automap") then map=not map end
+        if takePress("Restart") and health==0 then
+            startRun(seed%2147483646+1)
+            map,muzzleUntil=false,0
+        end
+        local perkChoice
+        for i=1,#weapons do
+            if takePress(slotActions[i]) then
+                if won and i<=3 then perkChoice=perkChoice or i
+                elseif not won and health>0 and owned[i] then selected=i end
+            end
+        end
+        if perkChoice then
+            perks[choices[perkChoice]][3]()
+            floorNumber=floorNumber+1
+            generate(seed%2147483646+1)
+            map, muzzleUntil=false, 0
+            return
+        end
+        if health<=0 or won then return end
+        local turn=(down("TurnRight",KEY.RIGHT) and 1 or 0)-(down("TurnLeft",KEY.LEFT) and 1 or 0)
+        local move=(down("Forward",KEY.UP,KEY.W) and 1 or 0)-(down("Backward",KEY.DOWN,KEY.S) and 1 or 0)
+        local strafe=(down("StrafeRight",KEY.D) and 1 or 0)-(down("StrafeLeft",KEY.A) and 1 or 0)
+        yaw=(yaw+turn*dt*2.5)%(2*math.pi)
+        local attack=down("Fire",KEY.SPACE)
+        if turn~=0 or move~=0 or strafe~=0 or use or attack then musicWanted=true end
+        updateMusic(now)
+        local dx,dy=math.cos(yaw),math.sin(yaw)
+        local step=dt*2.8*min(speedBoost,2)
+        if move~=0 and strafe~=0 then step=step/math.sqrt(2) end
+        local nx,ny=px+(dx*move-dy*strafe)*step,py+(dy*move+dx*strafe)*step
+        if clear(nx,py) then px=nx end
+        if clear(px,ny) then py=ny end
+        if use then
+            if abs(px-exitX)<1 and abs(py-exitY)<1 then
+                if boss and boss.hp>0 then
+                    notice("Defeat Mecha Breen to unlock the exit")
+                elseif hasKey then
+                    won=true
+                    stopMusic()
+                    effect("buttons/button14.wav")
+                    local first=(seed+floorNumber*4)%#perks
+                    choices={first+1,(first+2)%#perks+1,(first+4)%#perks+1}
+                    return
+                else
+                    notice("Find the exit keycard")
+                end
+            else useDoor(dx,dy) end
+        end
+        for _,door in pairs(doors) do
+            if door.open~=door.target then
+                local wasOpen=door.open==1
+                if door.target==1 then door.open=min(1,door.open+dt*2.7)
+                else door.open=max(0,door.open-dt*2.7) end
+                if wasOpen~=(door.open==1) then
+                    routeField=nil
+                    navigationRevision,doorRevision=navigationRevision+1,doorRevision+1
+                end
+            end
+        end
+        collect()
+        if attack and now>=shot then
+            if not weapons[selected].ammo or ammo[weapons[selected].ammo]>0 then muzzleUntil=now+0.075 end
+            local noise=fire(dx,dy,now)
+            if noise then hearGunshot(noise,now) end
+        end
+        updateEnemies(dt,now)
+        updateProjectiles(dt)
+        updateGibs(dt)
+        if health==0 then stopMusic() end
+    end
+
+    -- Screen rendering
+    local function rect(color, x, y, w, h)
+        render.setColor(color)
+        render.drawRect(x, y, w, h)
+    end
+    local colors = {
+        ceiling = Color(29, 36, 39), floor = Color(53, 56, 54), hud = Color(17, 19, 24),
+        text = Color(242, 232, 208), exit = Color(76, 205, 137),
+        trim = Color(44, 48, 52), flash = Color(255, 194, 72), pulse = Color(131, 231, 255),
+        warmup = Color(177, 100, 52)
+    }
+    local barrierPanels = {Color(39,61,71), Color(52,81,92), Color(30,47,57), Color(41,63,73)}
+    local titleFont=render.createFont("Roboto",38,800)
+    local menuFont=render.createFont("Roboto",18,500)
+    local wallColors = {}
+    for material = 1, 3 do
+        wallColors[material] = {}
+        local rgb = material == 1 and {108, 132, 139} or material == 2 and {91, 119, 106} or {178, 124, 58}
+        for shade = 1, 12 do
+            local light = 0.25 + shade * 0.0625
+            wallColors[material][shade] = Color(floor(rgb[1]*light), floor(rgb[2]*light), floor(rgb[3]*light))
+        end
+    end
+
+    local palette = {
+        H = Color(72, 78, 83), S = Color(224, 169, 118), G = Color(151, 65, 42),
+        D = Color(82, 34, 29), B = Color(42, 37, 39), W = Color(150, 102, 62),
+        L = Color(191, 138, 84), M = Color(107, 137, 116), R = Color(55, 77, 71),
+        E = colors.exit, T = colors.trim, Y = colors.flash, Q = Color(245,242,225), C = colors.pulse,
+        J = Color(49,55,57), N = Color(65,79,67), A = Color(154,165,156),
+        V = Color(185,204,195), K = Color(24,32,36), X = Color(213,61,45),
+    }
+    local spriteArt = {
+        supply = {"YYYYYYYY","YHHHHHHY","YHQQQQHY","YHQHHQHY","YHQQQQHY","YWWWWWWY","YYYYYYYY"},
+        key = {"YYYYYY","YHQQQY","YYYYYY","YHYYHY","YYYYYY"},
+        weapon = {"...HHH","HHHHHH","HHHTTT","..TT..","..T..."},
+        health = {"QQQQQQ","QQGGQQ","QGGGGQ","QQGGQQ","QQQQQQ"},
+        armor = {"..HHHH..",".HCXXCH.","HCXXXXCH","HHCHCHHH","HYAAAAHH","HHHHHHHH",".KKKKKK."},
+        ammo = {".YYYY.","YWWWWY","YWLWWY","YWLWWY","YYYYYY"},
+        rocket = {".QQ.","YYYY","YLLY",".GG."},
+        crossbowBolt = {"YY","LX","LX"},
+        gib = {".XX.","XGGX",".GD."},
+        scrap = {".HH.","HTYH",".TT."},
+        bolt = {".CY.","CQQC","CQQC",".YC."},
+        orb = {"..CC..",".CQQC.","CQQQQC","CQQQQC",".CQQC.","..CC.."},
+        crate = {
+            "LLLLLLLL",
+            "LWWWWWWL",
+            "LWLLWWWL",
+            "LWWWLLWL",
+            "LWWWWWWL",
+            "LLLLLLLL",
+        },
+        barrel = {
+            ".RRRRRR.",
+            "RMMMMMMR",
+            "TTTTTTTT",
+            "RMMMMMMR",
+            "RMMMRMMR",
+            "TTTTTTTT",
+            ".RRRRRR.",
+        },
+        exit = {
+            ".EEEEEE.",
+            ".ETTTTE.",
+            ".ETEETE.",
+            ".ETEEET.",
+            ".ETEETE.",
+            ".ETTTTE.",
+            ".ET..TE.",
+            ".ET..TE.",
+        },
+    }
+    local uniforms = {
+        metro = {
+            "...VVVV...",
+            "..VVVVVV..",
+            "..KVVVVK..",
+            "...VKVV...",
+            ".AGGGGGGA.",
+            "AGGKKKGGAF",
+            "GGGKKKGHFF",
+            ".KGKKKGK..",
+            "...NNNN...",
+            "..NN..NN..",
+            "..NN..NN..",
+            ".KKK..KKK.",
+        },
+        soldier = {"..HHHH..","..CHHC..","..HTTH..",".GGGGGG.","GGGGBBFF","GQGGBBG.","DDGGGGDD","..G..G..","..H..H..",".HH..HH."},
+        assassin = {"..TTTT..","..CRRC..","...TT...",".TTTTTT.","FTTTTTTF","TTHTTHTT",".TTTTTT.","..T..T..","..B..B..",".BB..BB."},
+        elite = {"..QQQQ..","..QGGQ..","..QTTQ..",".QQQQQQ.","QQQQTTFF","QQQQHHQQ","HQQQQQQH","..Q..Q..","..H..H..",".HH..HH."},
+        breen = {
+            "......SS......",
+            ".....SHHS.....",
+            ".....SSSS.....",
+            "...HHHHHHHH...",
+            ".HHQQHHHHQQHH.",
+            "HHHHQYYYYQHHHH",
+            "HHFFQYYYYQFFHH",
+            "TTHHHHHHHHHHTT",
+            "TT..HHHHHH..TT",
+            "....HH..HH....",
+            "...HHH..HHH...",
+            "..HHHH..HHHH..",
+        },
+    }
+    for i, stats in ipairs(roster) do
+        local base = i<=3 and uniforms.metro or i<=7 and uniforms.soldier
+            or i==8 and uniforms.assassin or i==9 and uniforms.elite or uniforms.breen
+        local rows = {}
+        for y, row in ipairs(base) do
+            rows[y] = string.gsub(row,"G",i==9 and "G" or stats[8])
+            if stats[4]=="melee" then rows[y]=string.gsub(rows[y],"F","H") end
+        end
+        spriteArt["guard"..i] = rows
+        local head=i<=3 and "V" or i==9 and "Q" or i==10 and "S" or "H"
+        spriteArt["corpse"..i]={
+            "..K"..head..head.."....GGG...",
+            ".K"..head..head..head.."GGGGGGKK..",
+            "KKKGGGGGGKKKK..",
+            "...KKK.DDKK....",
+        }
+        for y,row in ipairs(spriteArt["corpse"..i]) do
+            spriteArt["corpse"..i][y]=string.gsub(row,"G",stats[8])
+        end
+    end
+    local spriteSizes = {
+        guard={0.25,0.82,0}, boss={0.57,1.23,0}, exit={0.25,0.95,0}, crate={0.25,0.44,0}, barrel={0.22,0.44,0},
+        supply={0.28,0.45,0},
+        crossbowBolt={0.045,0.09,0.44},
+        corpse={0.48,0.19,0}, bossCorpse={0.72,0.25,0}, gib={0.075,0.11,0}, scrap={0.085,0.12,0},
+        key={0.14,0.24,0.10}, weapon={0.24,0.26,0.10}, health={0.17,0.24,0},
+        armor={0.18,0.20,0}, ammo={0.14,0.22,0}, rocket={0.12,0.24,0.38}, bolt={0.10,0.20,0.38}, orb={0.20,0.40,0.37},
+    }
+    -- Compile each pixel-art column into opaque runs once.
+    local spriteColumns = {}
+    for kind, rows in pairs(spriteArt) do
+        local columns = {}
+        for x = 1, #rows[1] do
+            local runs, first, previousPixel = {}, 1, "."
+            for y = 1, #rows + 1 do
+                local pixel = rows[y] and string.sub(rows[y], x, x) or "."
+                if pixel ~= previousPixel then
+                    local muzzle = previousPixel=="F"
+                    local color = muzzle and palette.H or palette[previousPixel]
+                    if color then
+                        runs[#runs + 1] = {color, (first-1)/#rows, (y-1)/#rows, muzzle}
+                    end
+                    first, previousPixel = y, pixel
+                end
+            end
+            columns[x] = runs
+        end
+        spriteColumns[kind] = columns
+    end
+    local depths, sprites, rays, edges = {}, {}, {}, {}
+    local barrierDepths, barrierTops = {}, {}
+    for i = 1, RAYS do
+        rays[i] = ((i-0.5) / RAYS * 2 - 1) * 0.70
+        edges[i] = floor((i-1)*STEP)
+    end
+    edges[RAYS+1] = WIDTH
+
+    local function drawScene()
+        rect(colors.ceiling, 0, 0, WIDTH, VIEW/2)
+        rect(colors.floor, 0, VIEW/2, WIDTH, VIEW/2)
+        local dx, dy = math.cos(yaw), math.sin(yaw)
+        local projection = WIDTH / 1.4
+        local now = gameTime
+        for i = 1, RAYS do
+            local d, side, cell, u, gx, gy, barrier, barrierU, barrierSide = cast(px, py, dx-dy*rays[i], dy+dx*rays[i], true)
+            depths[i] = d
+            barrierDepths[i] = barrier
+            local height = projection / max(d, 0.02)
+            local shade = 12 - floor(d * 0.9) - (side-1)*2
+            local material = cell == 2 and 3 or (floor(gx / 4 + gy / 4) % 2 + 1)
+            local top = (VIEW-height)/2
+            local left, right = edges[i], edges[i+1]
+            local y1, y2 = max(0, top), min(VIEW, top+height)
+            local upper = cell == 2 and floor(u*8)%2 or (u < 0.055 or abs(u-0.5) < 0.035) and 3 or 0
+            local lower = cell == 2 and upper or (abs(u-0.25) < 0.04 or abs(u-0.75) < 0.04) and 3 or 1
+            local seam = cell == 2 and 0.24 or 0.5
+            local boundary = max(y1, min(y2, top+height*seam))
+            local shades = wallColors[material]
+            if boundary > y1 then rect(shades[max(1, shade-upper)], left, y1, right-left, boundary-y1) end
+            if y2 > boundary then rect(shades[max(1, shade-lower-1)], left, boundary, right-left, y2-boundary) end
+            if barrier then
+                local scale=projection/max(barrier,0.02)
+                local top= min(VIEW, floor(VIEW/2+scale*0.10))
+                local bottom=min(VIEW, VIEW/2+scale*0.5)
+                barrierTops[i]=top
+                if bottom>top then
+                    local panel=barrierPanels[(barrierSide-1)*2+1+floor(barrierU*5)%2]
+                    rect(panel,left,top,right-left,bottom-top)
+                    rect(colors.pulse,left,top,right-left,min(bottom-top,max(1,scale*0.035)))
+                end
+            end
+        end
+
+        local count = 0
+        local function project(actor)
+            local dead=actor.hp and actor.hp<=0
+            if actor.sealed or actor.taken or actor.gibbed or (dead and actor.kind~="guard") then return end
+            local x, y = actor.x - px, actor.y - py
+            local z = x*dx + y*dy
+            if z > 0.15 and z < 15 then
+                local center = WIDTH/2 + projection * (y*dx-x*dy) / z
+                local kind=actor.kind
+                if dead then kind=actor.typeIndex==10 and "bossCorpse" or "corpse"
+                elseif actor.typeIndex==10 then kind="boss" end
+                local size=spriteSizes[kind]
+                local halfWidth = projection * size[1] / z
+                if center + halfWidth > 0 and center - halfWidth < WIDTH then
+                    count = count + 1
+                    local s = sprites[count] or {}
+                    s.depth, s.center, s.halfWidth, s.size = z, center, halfWidth, size
+                    local art=actor.typeIndex and ((dead and "corpse" or "guard")..actor.typeIndex) or kind
+                    s.columns,s.lift=spriteColumns[art],actor.lift or 0
+                    s.ducking=not dead and actor.ducking
+                    s.muzzleColor=not dead and (actor.flashUntil and actor.flashUntil>now and colors.flash
+                        or actor.windup and colors.warmup)
+                    s.alert=not dead and actor.alertUntil and actor.alertUntil>now
+                    sprites[count] = s
+                end
+            end
+        end
+        for _, actor in ipairs(actors) do project(actor) end
+        for _, projectile in ipairs(projectiles) do project(projectile) end
+        for _, gib in ipairs(gibs) do project(gib) end
+        for i = #sprites, count+1, -1 do sprites[i] = nil end
+        table.sort(sprites, function(a,b) return a.depth > b.depth end)
+        for _, s in ipairs(sprites) do
+            local scale = projection / s.depth
+            local bottom = VIEW/2 + scale*(0.5-s.size[3]-s.lift)
+            local height = scale*s.size[2]*(s.ducking and 0.46 or 1)
+            local top = bottom-height
+            local columns = s.columns
+            local spriteLeft = s.center-s.halfWidth
+            local columnWidth = 2*s.halfWidth / #columns
+            for column, runs in ipairs(columns) do
+                local left = max(0, spriteLeft+(column-1)*columnWidth)
+                local right = min(WIDTH, spriteLeft+column*columnWidth)
+                if #runs > 0 and right > left then
+                    local i = math.ceil((floor(left)+1)/STEP)
+                    while i <= RAYS and edges[i] < right do
+                        if s.depth >= depths[i] then
+                            i = i+1
+                        else
+                            local l = max(left, edges[i])
+                            local clip=barrierDepths[i] and s.depth>=barrierDepths[i] and barrierTops[i] or VIEW
+                            i = i + 1
+                            while i <= RAYS and edges[i] < right and s.depth < depths[i]
+                                and (barrierDepths[i] and s.depth>=barrierDepths[i] and barrierTops[i] or VIEW)==clip do
+                                i = i + 1
+                            end
+                            local r = min(right, edges[i])
+                            for _, run in ipairs(runs) do
+                                local t, b = max(0, top+run[2]*height), min(clip, top+run[3]*height)
+                                if b > t then rect(run[4] and s.muzzleColor or run[1], l, t, r-l, b-t) end
+                            end
+                        end
+                    end
+                end
+            end
+            if s.alert and s.center>=8 and s.center<=WIDTH-8 then
+                local ray=min(RAYS,floor(s.center/STEP)+1)
+                local y=max(6,top-23)
+                local clip=barrierDepths[ray] and s.depth>=barrierDepths[ray] and barrierTops[ray] or VIEW
+                if s.depth<depths[ray] and y+18<clip then
+                    rect(colors.hud,s.center-7,y,14,18)
+                    rect(colors.flash,s.center-1.5,y+3,3,7)
+                    rect(colors.flash,s.center-1.5,y+12,3,3)
+                end
+            end
+        end
+        rect(colors.text, 250, VIEW/2, 12, 1)
+        rect(colors.text, 256, VIEW/2-5, 1, 11)
+        local firing = muzzleUntil>gameTime
+        local weapon = selected
+        local w=weapons[weapon]
+        local width,height=w.width,w.height
+        local x, y = (WIDTH-width)/2+(firing and weapon==1 and 18 or 0), VIEW-height+(firing and weapon>1 and 8 or 0)
+        rect(palette.B,x-7,VIEW-21,width+14,21)
+        rect(palette.H,x,y,width,VIEW-y)
+        rect(palette.T,x+4,y+5,width-8,VIEW-y-5)
+        if weapon==1 then
+            rect(palette.G,x+2,y-8,9,70)
+            rect(palette.G,x-8,y-12,18,8)
+            rect(palette.H,x-10,y-11,7,15)
+        elseif weapon==5 then
+            rect(palette.M,x-5,y,width+10,18)
+            rect(palette.T,x+4,y+5,width-8,8)
+        elseif weapon==6 then
+            rect(palette.H,x-6,y+12,width+12,12)
+            rect(colors.pulse,x+8,y+14,width-16,5)
+            rect(palette.Q,x+width/2-5,y-5,10,12)
+        elseif weapon==7 then
+            rect(palette.H,x-12,y+10,width+24,5)
+            rect(palette.T,x-12,y+14,4,9)
+            rect(palette.T,x+width+8,y+14,4,9)
+            rect(palette.W,x+width/2-8,y+16,16,VIEW-y-16)
+            if not firing then rect(palette.X,x+width/2-1,y-5,3,25) end
+        elseif weapon==4 then
+            rect(palette.W,x+3,y+28,width-6,12)
+            rect(palette.H,x+width/2-1,y,2,28)
+        else
+            rect(palette.H,x+width/2-3,y-5,6,9)
+            if weapon==3 then rect(palette.W,x+2,y+28,width-4,10) end
+        end
+        if firing and weapon>1 and weapon~=7 then
+            rect(weapon==6 and colors.pulse or colors.flash,248,y-18,16,15)
+            rect(palette.Q,253,y-24,6,25)
+        end
+    end
+
+    local function drawMap()
+        rect(colors.hud, 0, 0, WIDTH, VIEW)
+        local size = floor(390/SIZE)
+        local ox, oy = floor((WIDTH-SIZE*size)/2), floor((VIEW-SIZE*size)/2)
+        for y=0,SIZE-1 do
+            local start, previous = 0, nil
+            for x=0,SIZE do
+                local t=tile(x,y)
+                local color=t==1 and wallColors[1][6] or t==3 and barrierPanels[2]
+                    or t==2 and doors[index(x,y)].open<1 and wallColors[3][12] or colors.floor
+                if x==SIZE or color~=previous then
+                    if previous then rect(previous,ox+start*size,oy+y*size,(x-start)*size,size) end
+                    start,previous=x,color
+                end
+            end
+        end
+        for _, item in ipairs(pickups) do
+            if not item.taken and (item.kind=="key" or item.kind=="weapon") then
+                rect(colors.flash,ox+item.x*size-2,oy+item.y*size-2,4,4)
+            end
+        end
+        rect(colors.exit,ox+exitX*size-3,oy+exitY*size-3,6,6)
+        rect(colors.text,ox+px*size-2,oy+py*size-2,4,4)
+        render.drawLine(ox+px*size,oy+py*size,ox+(px+math.cos(yaw)*0.7)*size,oy+(py+math.sin(yaw)*0.7)*size)
+    end
+
+    local function drawMenu()
+        rect(colors.hud,0,0,WIDTH,512)
+        rect(barrierPanels[1],0,0,WIDTH,154)
+        rect(colors.pulse,0,154,WIDTH,3)
+        render.setFont(titleFont)
+        render.setColor(colors.text)
+        render.drawText(31,89,menu=="title" and "The one free man" or "Paused")
+        render.setFont(menuFont)
+        rect(colors.pulse,32,198,184,39)
+        render.setColor(colors.hud)
+        render.drawText(47,207,menu=="title" and "E   Start run" or "E / M   Resume")
+        render.setColor(colors.text)
+        render.drawText(32,286,"WASD   Move / strafe   Left / Right   Turn")
+        render.drawText(32,315,"E   Use doors and exits")
+        render.drawText(32,344,"Space   Attack")
+        render.drawText(32,373,"1-7   Select weapon")
+        render.drawText(32,402,"T / Tab Map    M Pause    F1 Desktop")
+    end
+
+    function game.draw()
+        if menu then drawMenu(); return end
+        if map then drawMap() else drawScene() end
+        rect(colors.hud,0,VIEW,WIDTH,512-VIEW)
+        render.setColor(colors.text)
+        local w=weapons[selected]
+        render.drawText(11,453,string.format("FLOOR %d  HP %d/%d  ARMOR %d  GUARDS %d%s",
+            floorNumber,health,maxHealth,armor,remaining,hasKey and "  KEY" or ""))
+        render.drawText(11,471,string.format("%s | Bullets %d  Shells %d  Rockets %d  Cells %d  Bolts %d",
+            w.name,ammo[1],ammo[2],ammo[3],ammo[4],ammo[5]))
+        render.drawText(11,489,"WASD Move  Arrows Turn  E Use  Space Fire  1-7 Weapon  T Map  M Menu  F1 Desktop")
+        if boss and boss.hp>0 and not map and (boss.windup or (px-boss.x)^2+(py-boss.y)^2<16) then
+            rect(colors.hud,142,12,228,33)
+            render.setColor(colors.text)
+            render.drawText(149,13,"MECHA BREEN")
+            rect(palette.G,149,34,214*boss.hp/boss.maxHp,5)
+        end
+        if message and gameTime<messageUntil then
+            rect(colors.hud,12,53,337,25)
+            render.setColor(colors.text)
+            render.drawText(20,57,message)
+        end
+        if not map and not won and health>0 and gameTime<spottedUntil then
+            rect(colors.hud,192,83,128,23)
+            render.setColor(colors.flash)
+            render.drawText(216,86,"!  SPOTTED")
+        end
+        if won then
+            rect(colors.hud,55,126,402,198)
+            render.setColor(colors.text)
+            render.drawText(72,144,"FLOOR CLEAR   |   CHOOSE A PERK")
+            for i, choice in ipairs(choices) do
+                local perk=perks[choice]
+                render.drawText(72,174+i*27,i.."  "..perk[1].."   "..perk[2])
+            end
+        elseif health==0 then
+            rect(colors.hud,99,202,314,50)
+            render.setColor(colors.text)
+            render.drawText(115,217,"RUN ENDED   |   R FOR A NEW RUN")
+        end
+    end
+
+    return game
+end)()
+
+local keyboard = {focused = false, repeats = {}, confirmedUntil = 0, nextPing = 0}
+setupPermissionRequest({"input", "input.lockcontrols"}, "Control the demo from its linked screen", true)
+
+function keyboard.release()
+    if keyboard.focused then
+        pcall(input.lockControls, false)
+        if net.getBytesLeft() >= 64 then
+            net.start(CONTROL_MESSAGE)
+            net.writeUInt(RELEASE, 2)
+            net.send()
+        end
+    end
+    keyboard.focused, keyboard.repeats = false, {}
+end
+
+function keyboard.focus()
+    if keyboard.focused or not hasPermission("input") or not hasPermission("input.lockcontrols") then return end
+    local ok, allowed = pcall(input.canLockControls)
+    if ok and allowed then keyboard.focused = pcall(input.lockControls, true) end
+end
+
+function keyboard.sendKey(key)
+    if net.getBytesLeft() < 64 then return end
+    net.start(CONTROL_MESSAGE)
+    net.writeUInt(KEY_PRESS, 2)
+    net.writeUInt(key, 8)
+    net.send()
+end
+
 local function handleKey(key)
     local enter = key == 10 or key == 13 or key == 142
     if not themeConfigured then
@@ -1017,6 +2735,15 @@ local function handleKey(key)
         elseif enter then applyTheme() end
     elseif key == 163 then
         toggleDesktop()
+    elseif gameTab == "free_man" then
+        offline.freeMan.key(key, enter)
+    elseif gameTab == "music" then
+        if enter then offline.player.play()
+        elseif key == 32 then offline.player.stop()
+        elseif key == 17 then offline.player.move(-1)
+        elseif key == 18 then offline.player.move(1)
+        elseif key == 151 then offline.player.move(-4)
+        elseif key == 152 then offline.player.move(4) end
     elseif gameTab == "paint" then
         offline.paint.key(key, enter)
     elseif gameTab == "squadron" then
@@ -1030,12 +2757,14 @@ local function handleKey(key)
         if key == 19 then selectMenuTab(APPS)
         elseif key == 20 then selectMenuTab(GAMES)
         elseif key == 18 or enter then selectedGame = 1 end
-    elseif key == 19 then
-        selectedGame = 1
-    elseif key == 20 then
-        selectedGame = #menuOptions
+    elseif key == 19 and selectedGame % 2 == 0 then
+        selectedGame = selectedGame - 1
+    elseif key == 20 and selectedGame % 2 == 1 and menuOptions[selectedGame + 1] then
+        selectedGame = selectedGame + 1
     elseif key == 17 then
-        selectedGame = 0
+        selectedGame = math.max(0, selectedGame - 2)
+    elseif key == 18 and menuOptions[selectedGame + 2] then
+        selectedGame = selectedGame + 2
     elseif enter then
         openApp()
     end
@@ -1044,6 +2773,10 @@ end
 net.receive("demo_power", function()
     local powered = net.readBool()
     if powered ~= poweredOn then
+        if not powered then
+            offline.player.stop()
+            keyboard.release()
+        end
         poweredOn = powered
         startupUntil = powered and timer.curtime() + STARTUP_DURATION or 0
     end
@@ -1052,10 +2785,71 @@ end)
 net.receive("demo_keys", function()
     local count = net.readUInt(9)
     if not poweredOn or timer.curtime() < startupUntil then return end
+    if keyboard.focused then return end
     for i = 1, count do handleKey(net.readUInt(8)) end
 end)
 
-hook.add("think", "demo_minesweeper", function()
+net.receive("demo_held_keys", function()
+    if not poweredOn or keyboard.focused or gameTab ~= "free_man" or timer.curtime() < startupUntil then return end
+    for i = 1, net.readUInt(4) do offline.freeMan.key(net.readUInt(8), false) end
+end)
+
+keyboard.keys = {
+    [KEY.ENTER] = 13, [KEY.PAD_ENTER] = 13, [KEY.BACKSPACE] = 8, [KEY.SPACE] = 32,
+    [KEY.UP] = 17, [KEY.DOWN] = 18, [KEY.LEFT] = 19, [KEY.RIGHT] = 20,
+    [KEY.TAB] = 9, [KEY.F1] = 163, [KEY.PAGEUP] = 151, [KEY.PAGEDOWN] = 152,
+    [KEY.EQUAL] = 61, [KEY.MINUS] = 45, [KEY.SLASH] = 47, [KEY.PERIOD] = 46,
+}
+for i = 0, 25 do keyboard.keys[KEY.A + i] = 97 + i end
+for i = 0, 9 do keyboard.keys[KEY[tostring(i)]] = 48 + i end
+keyboard.movement = {[17]=true,[18]=true,[19]=true,[20]=true,[32]=true,[97]=true,[100]=true,[115]=true,[119]=true}
+
+hook.add("inputpressed", "demo_keyboard_focus", function(button)
+    if not keyboard.focused then return end
+    if button == KEY.LALT or button == KEY.RALT or button == KEY.ESCAPE then
+        keyboard.release()
+        return
+    end
+    local key = keyboard.keys[button]
+    if key and poweredOn and timer.curtime() >= startupUntil then
+        keyboard.sendKey(key)
+        if key ~= 163 then keyboard.repeats[button] = timer.curtime() + (keyboard.movement[key] and 0.06 or 0.3) end
+    end
+end)
+hook.add("inputreleased", "demo_keyboard_focus", function(button)
+    keyboard.repeats[button] = nil
+end)
+hook.add("removed", "demo_keyboard_focus", keyboard.release)
+
+local freeManActive = false
+hook.add("think", "demo_games", function()
+    local now = timer.curtime()
+    if keyboard.focused and now >= keyboard.confirmedUntil then keyboard.release() end
+    if keyboard.focused and now >= keyboard.nextPing and net.getBytesLeft() >= 64 then
+        keyboard.nextPing = now + 1
+        net.start(CONTROL_MESSAGE)
+        net.writeUInt(KEEPALIVE, 2)
+        net.send()
+    end
+    if keyboard.focused and poweredOn and now >= startupUntil then
+        for button, nextAt in pairs(keyboard.repeats) do
+            local key = keyboard.keys[button]
+            if not input.isKeyDown(button) then
+                keyboard.repeats[button] = nil
+            elseif now >= nextAt then
+                keyboard.repeats[button] = now + 0.06
+                keyboard.sendKey(key)
+            end
+        end
+    end
+    if player() ~= owner() then return end
+    local active = poweredOn and gameTab == "free_man" and now >= startupUntil
+    if active then
+        offline.freeMan.update()
+    elseif freeManActive then
+        offline.freeMan.pause()
+    end
+    freeManActive = active
     if poweredOn and gameTab == "squadron" and timer.curtime() >= startupUntil then
         offline.squadron.update(timer.curtime())
     else
@@ -1064,11 +2858,8 @@ hook.add("think", "demo_minesweeper", function()
     if poweredOn and gameTab == "mines" and mineSearch and not mineSearch() then mineSearch = nil end
 end)
 
-hook.add("StarfallUsed", "demo_controls", function(user, screen)
-    if not poweredOn or timer.curtime() < startupUntil or user ~= player() or not screen
-        or not screen:isValid() or screen:getClass() ~= "starfall_screen" then return end
-    local x, y = render.cursorPos(user, screen)
-    if not x or not y or x < 16 or x >= 496 then return end
+local function clickScreen(x, y)
+    if x < 16 or x >= 496 then return end
     if not themeConfigured then
         local offset = y - THEME_TOP
         if offset >= 0 and offset < #themes * THEME_STEP and offset % THEME_STEP < THEME_HEIGHT then
@@ -1076,10 +2867,14 @@ hook.add("StarfallUsed", "demo_controls", function(user, screen)
         elseif y >= 419 and y < 466 then applyTheme() end
     elseif x >= 369 and y >= 8 and y < 39 then
         toggleDesktop()
+    elseif gameTab == "music" then
+        offline.player.click(x, y)
     elseif gameTab == "paint" then
         offline.paint.click(x, y)
     elseif gameTab == "squadron" then
         offline.squadron.key(13, true)
+    elseif gameTab == "free_man" then
+        offline.freeMan.key(13, true)
     elseif gameTab == "calculator" then
         calculatorClick(x, y)
     elseif gameTab == "mines" then
@@ -1095,37 +2890,109 @@ hook.add("StarfallUsed", "demo_controls", function(user, screen)
     elseif y >= 82 and y < 114 then
         if x < 248 then selectMenuTab(APPS)
         elseif x >= 264 then selectMenuTab(GAMES) end
-    elseif (x < 248 or x >= 264) and y >= LAUNCHER_TOP and y < LAUNCHER_TOP + TILE_HEIGHT then
-        selectedGame = x < 248 and 1 or 2
-        openApp()
+    elseif (x < 248 or x >= 264) and y >= LAUNCHER_TOP then
+        local row, gap = math.floor((y - LAUNCHER_TOP) / 100), (y - LAUNCHER_TOP) % 100
+        local index = row * 2 + (x < 248 and 1 or 2)
+        if gap < TILE_HEIGHT and menuOptions[index] then
+            selectedGame = index
+            openApp()
+        end
+    end
+end
+
+net.receive(CONTROL_MESSAGE, function()
+    local action = net.readUInt(2)
+    if action == KEEPALIVE then
+        keyboard.confirmedUntil = timer.curtime() + 3
+        keyboard.focus()
+    elseif player() == owner() and poweredOn and timer.curtime() >= startupUntil then
+        if action == CLICK then
+            local x = net.readUInt(9)
+            clickScreen(x, net.readUInt(9))
+        elseif action == KEY_PRESS then
+            handleKey(net.readUInt(8))
+        end
     end
 end)
+
+local function sendScreenClick(screen, x, y)
+    if not x or not y or x < 0 or x >= 512 or y < 0 or y >= 512 or net.getBytesLeft() < 64 then return end
+    net.start(CONTROL_MESSAGE)
+    net.writeUInt(CLICK, 2)
+    net.writeUInt(screen:entIndex(), 16)
+    net.writeUInt(math.floor(x), 9)
+    net.writeUInt(math.floor(y), 9)
+    net.send()
+end
+
+hook.add("StarfallUsed", "demo_controls", function(user, screen)
+    if not poweredOn or timer.curtime() < startupUntil or user ~= player() or not screen
+        or not screen:isValid() or screen:getClass() ~= "starfall_screen" then return end
+    sendScreenClick(screen, render.cursorPos(user, screen))
+end)
+
+local mouseButtons = {MOUSE.LEFT, MOUSE.RIGHT}
+local mouseDown = {}
+local pointerX, pointerY
+hook.add("think", "demo_screen_mouse", function()
+    pointerX, pointerY = nil, nil
+    if not hasPermission("input") then return end
+    local clicked = false
+    for _, button in ipairs(mouseButtons) do
+        local down = input.isMouseDown(button)
+        clicked = clicked or (down and mouseDown[button] == false)
+        mouseDown[button] = down
+    end
+    if not keyboard.focused or not poweredOn or timer.curtime() < startupUntil then return end
+    local user = player()
+    local screen = user:getEyeTrace().Entity
+    if not screen or not screen:isValid() or screen:getClass() ~= "starfall_screen" then return end
+    local x, y = render.cursorPos(user, screen)
+    if not x or not y or x < 0 or x >= 512 or y < 0 or y >= 512 then return end
+    pointerX, pointerY = x, y
+    if clicked then sendScreenClick(screen, x, y) end
+end)
+
+local function drawPointer()
+    if not pointerX then return end
+    local x, y = pointerX, pointerY
+    display.setColor(Color(0, 0, 0))
+    display.drawRect(x - 2, y - 9, 5, 19)
+    display.drawRect(x - 9, y - 2, 19, 5)
+    display.setColor(Color(255, 255, 255))
+    display.drawRect(x, y - 8, 1, 17)
+    display.drawRect(x - 8, y, 17, 1)
+end
 
 local function renderDesktop()
     render.setColor(panel)
     render.drawRect(16, 82, TILE_WIDTH, 32)
     render.drawRect(264, 82, TILE_WIDTH, 32)
-    render.drawRect(16, LAUNCHER_TOP, TILE_WIDTH, TILE_HEIGHT)
-    render.drawRect(264, LAUNCHER_TOP, TILE_WIDTH, TILE_HEIGHT)
-    render.setColor(accent)
     if selectedGame == 0 then
+        render.setColor(accent)
         render.drawRect(menuOptions == APPS and 16 or 264, 111, TILE_WIDTH, 3)
-    else
-        render.drawRect(selectedGame == 1 and 16 or 264, LAUNCHER_TOP, 4, TILE_HEIGHT)
     end
     label(28, 89, "Apps", menuOptions == APPS and accent or muted)
     label(276, 89, "Games", menuOptions == GAMES and accent or muted)
     for i, app in ipairs(menuOptions) do
-        local x = i == 1 and 30 or 278
-        label(x, LAUNCHER_TOP + 16, app.name, selectedGame == i and accent or ink)
-        label(x, LAUNCHER_TOP + 48, app.detail, muted, smallFont)
+        local x = i % 2 == 1 and 16 or 264
+        local y = LAUNCHER_TOP + math.floor((i - 1) / 2) * 100
+        render.setColor(panel)
+        render.drawRect(x, y, TILE_WIDTH, TILE_HEIGHT)
+        if selectedGame == i then
+            render.setColor(accent)
+            render.drawRect(x, y, 4, TILE_HEIGHT)
+        end
+        label(x + 14, y + 16, app.name, selectedGame == i and accent or ink)
+        label(x + 14, y + 48, app.detail, muted, smallFont)
     end
     label(22, 418, "For full version visit", ink, smallFont)
     label(22, 440, "https://github.com/Mooseyboi30/MaxwellOS", accent, smallFont)
-    label(22, 483, "Aim and press E, or use arrows and Enter.", muted, smallFont)
+    label(22, 483, "Press E to take control, then aim and click.", muted, smallFont)
 end
 
-hook.add("render", "demo_screen", function()
+local function drawScreen()
+    render.setFont(font)
     if not poweredOn then
         render.setColor(Color(9, 13, 19))
         render.drawRect(0, 0, 512, 512)
@@ -1136,6 +3003,17 @@ hook.add("render", "demo_screen", function()
     local now = timer.curtime()
     render.setColor(background)
     render.drawRect(0, 0, 512, 512)
+    local crashRemaining = startupUntil - now - STARTUP_DURATION
+    if crashRemaining > 0 then
+        render.setColor(Color(7, 15, 25))
+        render.drawRect(0, 0, 512, 512)
+        label(28, 114, "SYSTEM CRASH", Color(255, 120, 125), titleFont)
+        local detail = "Calculator exception: division by zero."
+        local visible = math.floor(#detail * math.min(1, (2.5 - crashRemaining) / 1.2))
+        label(28, 178, detail:sub(1, visible), Color(230, 241, 250), smallFont)
+        label(28, 224, "Restarting in " .. math.ceil(crashRemaining) .. "s", Color(155, 176, 198), smallFont)
+        return
+    end
     if now < startupUntil then
         local progress = 1 - (startupUntil - now) / STARTUP_DURATION
         label(72, 200, "Starting computer", ink, titleFont)
@@ -1150,8 +3028,17 @@ hook.add("render", "demo_screen", function()
     render.setColor(panel)
     render.drawRect(0, 0, 512, 72)
     if not themeConfigured then renderThemeSetup(); return end
+    if gameTab == "free_man" then
+        offline.freeMan.draw()
+        render.setColor(panel)
+        render.drawRect(369, 8, 127, 31)
+        label(380, 15, "F1 Desktop", accent, smallFont)
+        if keyboard.focused then label(380, 43, "Alt releases keys", ink, smallFont) end
+        return
+    end
     local title = gameTab == "calculator" and "Calculator" or (gameTab == "mines" and "Minesweeper" or "Computer Demo")
-    if gameTab == "paint" then title = "Paint"
+    if gameTab == "music" then title = "HL2 Music Player"
+    elseif gameTab == "paint" then title = "Paint"
     elseif gameTab == "squadron" then title = "Star Squadron" end
     label(22, 10, title, ink, titleFont)
     label(22, 46, "Offline demo", muted, smallFont)
@@ -1161,8 +3048,57 @@ hook.add("render", "demo_screen", function()
         label(380, 15, gameTab == "menu" and "F1 Last app" or "F1 Desktop", accent, smallFont)
     end
     if gameTab == "calculator" then renderCalculator()
+    elseif gameTab == "music" then offline.player.draw()
     elseif gameTab == "paint" then offline.paint.draw()
     elseif gameTab == "squadron" then offline.squadron.draw()
     elseif gameTab == "mines" then renderMines()
     else renderDesktop() end
+end
+
+local sharedFrame, nextCapture = nil, 0
+net.receive(SCREEN_MESSAGE, function(bits)
+    if player() == owner() then return end
+    local data = readScreenFrame(bits)
+    if not data then return end
+    local decoded = bit.decompress(data, 384000)
+    if not decoded then return end
+    local ok, commands = pcall(json.decode, decoded)
+    if ok and type(commands) == "table" then sharedFrame = commands end
+end)
+
+hook.add("render", "demo_screen", function()
+    if player() ~= owner() then
+        if sharedFrame then
+            for _, command in ipairs(sharedFrame) do
+                local op = command[1]
+                if op == 5 then
+                    display.setFont(fonts[command[2]])
+                elseif op == 6 then
+                    display.setColor(Color(command[2], command[3], command[4], command[5]))
+                else
+                    display[drawMethods[op]](unpack(command, 2))
+                end
+            end
+        else
+            display.setColor(Color(9, 13, 19))
+            display.drawRect(0, 0, 512, 512)
+            label(22, 240, "Waiting for the owner's demo screen...", ink, smallFont)
+        end
+        drawPointer()
+        return
+    end
+
+    local now = timer.curtime()
+    if bit and bit.compress and json and now >= nextCapture then
+        nextCapture = now + 0.2
+        frame = {}
+    end
+    drawScreen()
+    if frame then
+        local commands = frame
+        frame = nil
+        local data = bit.compress(json.encode(commands))
+        if data and #data <= MAX_FRAME_BYTES then sendScreenFrame(data) end
+    end
+    drawPointer()
 end)
