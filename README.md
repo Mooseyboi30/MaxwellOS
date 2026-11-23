@@ -2,7 +2,7 @@
 
 A Starfall desktop for Garry's Mod with local apps, chatrooms, MaxwellNET websites, games, Paint and music.
 
-Computer and chatroom server: **v50.3**. The standalone phone has its own version number and includes the current shared desktop features.
+Computer and chatroom server: **v50.3**. The standalone phone uses the same release version and includes the current shared desktop features.
 
 ## Install
 
@@ -10,7 +10,7 @@ Computer and chatroom server: **v50.3**. The standalone phone has its own versio
 2. For the computer, keep **both** `mos_companion_runtime.txt` and `mos_desktop_tools.txt` beside `starfall_chatroom_computer.txt`. Upload the computer and link a Starfall screen. Upload files through the editor rather than pasting only the main script, so its includes are collected.
 3. Optionally wire a Wiremod Keyboard's key array and User outputs to `KeyboardKeys` and `KeyboardUser`. The `Power` input turns the computer off at 0.
 4. Upload `starfall_chatroom_server.txt` to host a chatroom, or a website chip to publish a MaxwellNET site. Website Viewer works without joining a chatroom.
-5. Alternatively, upload `maxwellos_phone.txt` for the standalone phone. Its shared helpers are bundled, so it needs no extra include files. Compass, TTS and the holographic display are phone-only features.
+5. Alternatively, upload `maxwellos_phone.txt` for the standalone phone. Its shared helpers are bundled, so it needs no extra include files. Compass and TTS are phone-only features.
 
 Grant Starfall permissions when prompted. Reupload a chip after updating its source; refreshing Desktop only reloads installed app files.
 

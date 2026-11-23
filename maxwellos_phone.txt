@@ -1,5 +1,7 @@
 --@name MaxwellOS Phone
 --@shared
+local CHIP_VERSION = "50.3"
+local CHATROOM_VERSION = "50.3"
 -- Companion runtime is bundled so the standalone phone uploads as one file.
 local MOS_SERVICES=(function()
 -- Hosted companion modules share this processor's Starfall permissions and quota.
@@ -369,125 +371,6 @@ hook.add("drawhud", "basic_compass_hud", function()
 end)
 end
 initializePhoneCompass()
-
-local PHONE_HOLO = {open = false, rgb = {102, 222, 189}}
-function PHONE_HOLO.setTheme(color)
-    PHONE_HOLO.rgb = {color.r, color.g, color.b}
-    if PHONE_HOLO.open and PHONE_HOLO.publish then PHONE_HOLO.publish() end
-end
-do
-    if SERVER then
-        local open, expires, nextUpdate = false, 0, 0
-        local rgb = {102, 222, 189}
-        local function publish(target)
-            if net.getBytesLeft() < 64 then return end
-            net.start("phone_optics_state")
-            net.writeBool(open)
-            for i=1,3 do net.writeUInt(rgb[i],8) end
-            net.send(target)
-        end
-        net.receive("phone_optics_open", function(_, ply)
-            if ply ~= owner() then return end
-            local active = net.readBool()
-            local incoming = {net.readUInt(8),net.readUInt(8),net.readUInt(8)}
-            local now = timer.curtime()
-            if active and now < nextUpdate then return end
-            nextUpdate = now + 0.2
-            open, expires, rgb = active, now + 3.5, incoming
-            publish()
-        end)
-        hook.add("ClientInitialized", "phone_optics_sync", function(ply) publish(ply) end)
-        timer.create("phone_optics_expiry", 1, 0, function()
-            if open and (not isValid(owner()) or not owner():isAlive() or timer.curtime() > expires) then
-                open = false
-                publish()
-            end
-        end)
-    else
-        local activeUntil, nextHeartbeat, nextPaint = 0, 0, 0
-        local display, displayMaterial, displayMesh
-        local target = "maxwellos_optics_display"
-        local font = render.createFont("Roboto", 24, 700, true)
-        local small = render.createFont("Roboto", 16, 500, true)
-        function PHONE_HOLO.publish()
-            if player() ~= owner() or net.getBytesLeft() < 64 then return end
-            net.start("phone_optics_open")
-            net.writeBool(PHONE_HOLO.open)
-            for i=1,3 do net.writeUInt(PHONE_HOLO.rgb[i],8) end
-            net.send()
-            nextHeartbeat = timer.curtime() + 1
-        end
-        net.receive("phone_optics_state", function()
-            activeUntil = net.readBool() and timer.curtime() + 3.5 or 0
-            PHONE_HOLO.rgb = {net.readUInt(8),net.readUInt(8),net.readUInt(8)}
-        end)
-        hook.add("renderoffscreen", "phone_optics_texture", function()
-            if timer.curtime() >= activeUntil or timer.curtime() < nextPaint then return end
-            nextPaint = timer.curtime() + 0.1
-            if not render.renderTargetExists(target) then render.createRenderTarget(target) end
-            render.selectRenderTarget(target)
-            render.clear(Color(0, 0, 0, 0))
-            local r,g,b=unpack(PHONE_HOLO.rgb)
-            render.setColor(Color(math.floor(r*0.1), math.floor(g*0.1), math.floor(b*0.1), 125))
-            render.drawRect(12, 12, 488, 300)
-            render.setColor(Color(r, g, b, 210))
-            render.drawRectOutline(12, 12, 488, 300, 2)
-            render.drawRect(22, 55, 468, 2)
-            render.drawRect(22, 264, 468, 1)
-            render.setFont(font)
-            render.drawText(26, 23, "MAXWELL // OPTIC LINK", 0)
-            render.setFont(small)
-            render.drawText(28, 72, "NEURAL INTERFACE   /   CONNECTED", 0)
-            render.drawText(28, 281, "POCKET OS   //   SESSION ACTIVE", 0)
-            for i = 0, 7 do
-                render.setColor(Color(r, g, b, 95))
-                render.drawRect(28, 110 + i * 17, 160 + (i * 47 % 220), 4)
-            end
-            local scan = 96 + timer.curtime() * 55 % 160
-            render.setColor(Color(r+(255-r)*0.35, g+(255-g)*0.35, b+(255-b)*0.35, 105))
-            render.drawRect(22, scan, 468, 2)
-            for y = 16, 310, 5 do
-                render.setColor(Color(r, g, b, 18))
-                render.drawRect(14, y, 484, 1)
-            end
-            render.selectRenderTarget()
-        end)
-        hook.add("think", "phone_optics_follow", function()
-            if player() == owner() then
-                if PHONE_HOLO.open and timer.curtime() >= nextHeartbeat then PHONE_HOLO.publish() end
-            end
-            local visible = timer.curtime() < activeUntil and isValid(owner()) and owner():isAlive()
-                and player():getPos():getDistance(owner():getPos()) < 1800
-            if not visible then
-                if isValid(display) then display:setNoDraw(true) end
-                return
-            end
-            if not render.renderTargetExists(target) then return end
-            if not isValid(display) then
-                if not hologram.canSpawn() then return end
-                if not displayMaterial then
-                    displayMaterial = material.create("UnlitGeneric")
-                    displayMaterial:setTextureRenderTarget("$basetexture", target)
-                    displayMaterial:setInt("$translucent", 1)
-                    displayMaterial:setInt("$nocull", 1)
-                    displayMaterial:recompute()
-                    local function v(x, z, u, texV) return {pos = Vector(x, 0, z), u = u, v = texV} end
-                    local a,b,c,d = v(-14,9,0,0),v(14,9,0.5,0),v(14,-9,0.5,0.316),v(-14,-9,0,0.316)
-                    displayMesh = mesh.createFromTable({a,b,c,a,c,d})
-                end
-                display = hologram.create(owner():getEyePos(), Angle(), "models/holograms/cube.mdl")
-                display:setMeshMaterial(displayMaterial)
-                display:setMesh(displayMesh)
-                display:setRenderBounds(Vector(-15,-1,-10), Vector(15,1,10))
-            end
-            local yaw = owner():getEyeAngles().y
-            local facing = Angle(0, yaw, 0)
-            display:setPos(owner():getEyePos() + facing:getForward() * 22 + Vector(0,0,-7))
-            display:setAngles(Angle(0, yaw + 90, 0))
-            display:setNoDraw(false)
-        end)
-    end
-end
 
 local PHONE_TTS = {forward = false, preset = 1, pitch = 1, volume = 1, enabled = true, mode = 2, page = 0, focus = false}
 PHONE_TTS.presets = {
@@ -917,12 +800,12 @@ end
 end
 
 do
-local CHIP_VERSION = "46.0"
 -- Get matching chip versions at https://github.com/Mooseyboi30/MaxwellOS
 local CHANGELOG = {
+    {"v50.3", "Fixed phone update detection to check the phone release separately from chatroom compatibility."},
     {"Desktop tools", "Added App Manager, search, saved icon order and pins, notifications and quiet mode, profile transfer, Wire Dashboard, two app windows with running taskbar icons, and Paint undo/redo and shape tools."},
     {"App packages", "Phone supports mosapps packages, helper modules, bundled automatic companions, the sprite demo, physical/Wire keyboard rollover, Paint dragging, and Website Maker discovery fixes."},
-    {"Phone features", "Standalone phone adds customizable proximity TTS with saved voice settings and optional forwarding to the active room channel, speech bubbles, typing indicators, a compass HUD, and a holographic optic display."},
+    {"Phone features", "Standalone phone adds customizable proximity TTS with saved voice settings and optional forwarding to the active room channel, speech bubbles, typing indicators, a compass HUD."},
     {"v46.0", "Refined the desktop with compact left-aligned shortcuts and a centered taskbar. Added saved PNG/JPG wallpaper selection from sf_filedata/moswallpapers."},
     {"v45.8", "Added automatic mosapps Lua app discovery, lifecycle callbacks, and per-app saves."},
     {"v44.7", "MaxwellNET adds forms, capability checks, action responses, subsites, navigation, favorites, storage helpers, and loading errors. Added Files and Website Maker with .txt export."},
@@ -2377,7 +2260,7 @@ local updates = {latest = nil}
 function updates.check()
     if not isOwner or not http or not http.get then return end
     if http.canRequest and not http.canRequest() then return end
-    local url = "https://raw.githubusercontent.com/Mooseyboi30/MaxwellOS/main/starfall_chatroom_computer.txt"
+    local url = "https://raw.githubusercontent.com/Mooseyboi30/MaxwellOS/main/maxwellos_phone.txt"
     pcall(http.get, url, function(body, _, _, code)
         if code ~= 200 or type(body) ~= "string" then return end
         local version = body:sub(1, 1024):match('CHIP_VERSION = "(%d%d?%d?%.%d)"')
@@ -2876,7 +2759,6 @@ end
 local function applyTheme()
     local theme = themes[settings.theme]
     background, panel, accent = theme.background, theme.panel, theme.accent
-    PHONE_HOLO.setTheme(accent)
     ink, muted, alertColor = theme.ink or themes.defaultInk, theme.muted or themes.defaultMuted, theme.alert or themes.defaultAlert
     themeConfigured = true
     settings.saveProfile()
@@ -4358,7 +4240,7 @@ end
 local function versionStatus(version)
     local serverVersion = tonumber(version)
     if not serverVersion then return "Server version unknown", false end
-    local computerVersion = tonumber(CHIP_VERSION)
+    local computerVersion = tonumber(CHATROOM_VERSION)
     local text = "Server v" .. version
     if serverVersion < computerVersion then return text .. " (outdated)", true end
     if serverVersion > computerVersion then return text .. " (ahead)", true end
@@ -7380,8 +7262,6 @@ if isOwner then
     function PHONE.setOpen(enabled)
         if not enabled then PHONE.setControlsLocked(false) end
         PHONE.open = enabled
-        PHONE_HOLO.open = enabled
-        PHONE_HOLO.publish()
         PHONE_TTS.focus = enabled
         if enabled then PHONE.activateHud() end
         if hasPermission("input.enablecursor") then
@@ -8611,7 +8491,7 @@ function PHONE.drawComputerScreen()
         render.setFont(smallFont)
         label(496 - render.getTextSize(notice), 46, notice, alertColor, smallFont)
     else
-        label(376, 46, "Computer v" .. CHIP_VERSION, muted, smallFont)
+        label(376, 46, "Phone v" .. CHIP_VERSION, muted, smallFont)
     end
     if room ~= "" then
         if not gameTab and not showPayments and not showPrivate then
