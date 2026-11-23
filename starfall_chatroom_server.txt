@@ -1,8 +1,7 @@
 --@name Chatroom Server
---@author v39.7
 --@shared
 
-local CHIP_VERSION = "39.7"
+local CHIP_VERSION = "50.3"
 
 -- Match NETWORK in the computer chip. Set the room name and password on the linked screen.
 local NETWORK = "lobby"
@@ -1106,6 +1105,109 @@ timer.create("chatroom_pong", PONG_STEP, 0, function()
     end
 end)
 
+
+local contracts = {entries={}, pending={}, nextId=0, cooldown={}}
+function contracts.pay(entry, recipient)
+    local api = economy and economy.giveMoney and economy or darkrp
+    entry.recipient = recipient
+    if not api or not api.giveMoney or not api.canAfford then entry.state="Payment unavailable"; return end
+    if not recipient or not recipient:isValid() then entry.state="Recipient offline"; return end
+    if recipient == owner() then entry.state="Paid"; return end
+    local ok, funds = pcall(api.canAfford, owner(), entry.amount)
+    if not ok or not funds then entry.state="Awaiting funds"; return end
+    entry.state="Paying"
+    local paid, result = pcall(api.giveMoney, recipient, entry.amount)
+    entry.state = paid and result~=false and "Paid" or "Payment needs review"
+end
+hook.add("PlayerDeath", "room_contracts", function(victim, _, attacker)
+    if not attacker or not attacker:isValid() or not attacker:isPlayer() or victim==attacker then return end
+    for _,entry in pairs(contracts.entries) do
+        if entry.state=="Accepted" and entry.target==victim and entry.hunter==attacker then contracts.pay(entry,attacker) end
+    end
+end)
+timer.create("room_contract_settle",5,0,function()
+    for _,entry in pairs(contracts.entries) do
+        if entry.state=="Awaiting funds" or entry.state=="Recipient offline" then contracts.pay(entry,entry.recipient) end
+        if entry.state=="Accepted" and not entry.hunter:isValid() then entry.state,entry.hunter="Open",nil end
+        if (entry.state=="Open" or entry.state=="Accepted") and not entry.target:isValid() then contracts.pay(entry,entry.poster) end
+    end
+end)
+function contracts.action(user, action, value)
+    if action=="contracts_post" then
+        local api = economy and economy.requestMoney and economy or darkrp
+        if not api or not api.requestMoney or not api.canAfford or not api.giveMoney then return {notice="Payment API unavailable."} end
+        local target = type(value)=="table" and entity(value.target or 0)
+        local amount = type(value)=="table" and value.amount
+        if not target or not target:isValid() or not target:isPlayer() or target==user then
+            return {notice="Choose another player as the target."}
+        end
+        if type(amount)~="number" or amount<1 or amount>1000000 or amount%1~=0 then return {notice="Amount must be 1 to 1000000."} end
+        if contracts.pending[user] or timer.curtime()<(contracts.cooldown[user] or 0) then return {notice="Payment pending or on cooldown."} end
+        local count=0
+        for _ in pairs(contracts.entries) do count=count+1 end
+        if count>=32 then
+            for id, entry in pairs(contracts.entries) do
+                if entry.state == "Paid" then contracts.entries[id] = nil; count = count - 1 end
+            end
+        end
+        if count>=32 then return {notice="Board full. Settle contracts before replacing the chip."} end
+        contracts.cooldown[user]=timer.curtime()+3
+        contracts.nextId=contracts.nextId+1
+        local entry={id=contracts.nextId, target=target,targetName=target:getName():sub(1,48),
+            poster=user,amount=amount,state="Funding"}
+        if user == owner() then
+            local reserved = 0
+            for _, existing in pairs(contracts.entries) do
+                if existing.state ~= "Paid" then reserved = reserved + existing.amount end
+            end
+            local ok, affordable = pcall(api.canAfford, user, reserved + amount)
+            if not ok or not affordable then return {notice="Owner wallet cannot cover these contracts."} end
+            entry.state = "Open"
+            contracts.entries[entry.id] = entry
+            return {notice="Contract funded from your owner wallet."}
+        end
+        contracts.entries[entry.id],contracts.pending[user]=entry,entry
+        local ok=pcall(function()
+            if api.canMakeMoneyRequest and not api.canMakeMoneyRequest(user) then error("Pending") end
+            if not api.canAfford(user,amount) then error("Funds") end
+            api.requestMoney(user,amount,"Fund player contract",function()
+                if contracts.pending[user]~=entry then return end
+                contracts.pending[user]=nil
+                entry.state="Open"
+                if not target:isValid() then contracts.pay(entry,user) end
+            end,function()
+                if contracts.pending[user]==entry then contracts.pending[user],contracts.entries[entry.id]=nil,nil end
+            end)
+        end)
+        if not ok then
+            contracts.pending[user],contracts.entries[entry.id]=nil,nil
+            return {notice="Payment failed. Check balance and permissions."}
+        end
+        return {notice="Confirm funding prompt, then press R."}
+    elseif action=="contracts_accept" or action=="contracts_cancel" then
+        local entry=contracts.entries[tonumber(value)]
+        if not entry then return {notice="Contract missing."} end
+        if action=="contracts_accept" then
+            if entry.state~="Open" or user==entry.poster or user==entry.target then return {notice="Cannot accept this contract."} end
+            entry.state,entry.hunter="Accepted",user
+            return {notice="Accepted. Your kill of the target earns the reward."}
+        elseif entry.poster==user and entry.state=="Open" then
+            contracts.pay(entry,user)
+            return {notice="Refund status: "..entry.state}
+        end
+        return {notice="You can cancel only your own open contracts."}
+    end
+    local entries,players={},{}
+    for _,entry in pairs(contracts.entries) do
+        if entry.state~="Funding" then entries[#entries+1]={id=entry.id,target=entry.targetName,amount=entry.amount,state=entry.state} end
+    end
+    table.sort(entries,function(a,b) return a.id<b.id end)
+    for _,candidate in ipairs(find.allPlayers()) do
+        if candidate~=user and #players<64 then players[#players+1]={id=candidate:entIndex(),name=candidate:getName():sub(1,48)} end
+    end
+    return {entries=entries,players=players,notice="Select a target and amount, or accept a contract."}
+end
+
 hook.add("remote", "chatroom", function(sender, senderOwner, protocol, network, action, value, extra)
     if protocol ~= PROTOCOL or not roomName or type(action) ~= "string" then return end
     if action == "probe" then return roomName, NETWORK, password ~= "", CHIP_VERSION end
@@ -1163,6 +1265,9 @@ hook.add("remote", "chatroom", function(sender, senderOwner, protocol, network, 
         return
     end
     session.expires = now + 15
+    if action=="contracts_list" or action=="contracts_post" or action=="contracts_accept" or action=="contracts_cancel" then
+        return contracts.action(senderOwner,action,value)
+    end
     if action == "rename" then
         if type(value) ~= "string" or #value > 24 or not value:match("^[A-Za-z0-9_-]+$") then
             return "Invalid computer name."

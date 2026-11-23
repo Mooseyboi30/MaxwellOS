@@ -1,0 +1,61 @@
+local service={role="sprite",name="Sprite Module"}
+if SERVER then
+    function service.init(api)
+        api.state.visible=api.state.visible==true
+        api.state.color=api.state.color or {r=90,g=190,b=255}
+    end
+    function service.request(api,action,data)
+        if action~="show" and action~="hide" then return {ok=false,error="Unknown sprite action."} end
+        if type(data)=="table" then
+            for _,key in ipairs({"r","g","b"}) do
+                local value=data[key]
+                if type(value)=="number" and value==value then api.state.color[key]=math.floor(math.max(0,math.min(255,value))) end
+            end
+        end
+        api.state.visible=action=="show"
+        api.publish()
+        return {ok=true,visible=api.state.visible,message=api.state.visible and "Sprite shown above this computer." or "Sprite hidden."}
+    end
+else
+    local sprite,spriteMaterial,spriteMesh
+    function service.update(api)
+        if not api.state.visible then
+            if isValid(sprite) then sprite:setNoDraw(true) end
+            return
+        end
+        if not hasPermission("hologram.create") or not hasPermission("material.create") then return end
+        if not isValid(sprite) then
+            if not hologram.canSpawn() then return end
+            if not spriteMaterial then
+                spriteMaterial=material.create("UnlitGeneric")
+                spriteMaterial:setTexture("$basetexture","sprites/light_glow02")
+                spriteMaterial:setInt("$additive",1)
+                spriteMaterial:setInt("$translucent",1)
+                spriteMaterial:setInt("$nocull",1)
+                spriteMaterial:recompute()
+                local function v(x,z,u,texV) return {pos=Vector(x,0,z),u=u,v=texV} end
+                local a,b,c,d=v(-16,16,0,0),v(16,16,1,0),v(16,-16,1,1),v(-16,-16,0,1)
+                spriteMesh=mesh.createFromTable({a,b,c,a,c,d})
+            end
+            sprite=hologram.create(api.position(),Angle(),"models/holograms/cube.mdl")
+            sprite:setMesh(spriteMesh)
+            sprite:setMeshMaterial(spriteMaterial)
+            sprite:setRenderBounds(Vector(-20,-2,-20),Vector(20,2,20))
+        end
+        local position=api.position()+Vector(0,0,48)
+        local facing=(eyePos()-position):getAngle()
+        facing:rotateAroundAxis(facing:getUp(),90)
+        local color=api.state.color or {r=90,g=190,b=255}
+        sprite:setPos(position)
+        sprite:setAngles(facing)
+        sprite:setColor(Color(color.r,color.g,color.b))
+        sprite:setNoDraw(false)
+    end
+    function service.close(api)
+        if isValid(sprite) then sprite:remove() end
+        if spriteMesh then spriteMesh:destroy();spriteMesh=nil end
+        if spriteMaterial then spriteMaterial:destroy();spriteMaterial=nil end
+        sprite=nil
+    end
+end
+return service

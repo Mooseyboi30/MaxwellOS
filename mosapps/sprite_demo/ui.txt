@@ -1,0 +1,7 @@
+return {
+    button = function(api, x, y, text)
+        render.setColor(api.theme().accent)
+        render.drawRect(x, y, 200, 44)
+        api.label(x + 12, y + 12, text, api.theme().background)
+    end
+}

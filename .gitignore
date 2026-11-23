@@ -1,0 +1,10 @@
+__pycache__/
+*.py[cod]
+.venv/
+.starfall-deps/
+.codex/
+Backups/
+artifacts/
+tests/previews/
+*.bak
+*~

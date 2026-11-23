@@ -1,0 +1,57 @@
+-- MaxwellOS installable app. Put this file in MaxwellOS/mosapps or starfall/mosapps.
+-- The module receives its app context as the first chunk argument.
+local api = ...
+local titleFont = render.createFont("Roboto", 28, 700)
+
+local function save(context)
+    local ok = pcall(context.write, "count", tostring(context.state.count or 0))
+    context.state.message = ok and "Saved." or "Grant file access to save."
+end
+
+return {
+    id = "counter",
+    name = "Counter",
+    description = "Example installable Lua app",
+
+    open = function(context)
+        if context.state.count == nil then
+            local ok, value = pcall(context.read, "count", "0")
+            context.state.count = ok and tonumber(value) or 0
+            context.state.count = context.state.count or 0
+        end
+        context.state.message = "Click or press Enter to count. S saves."
+    end,
+
+    draw = function(context)
+        local theme = context.theme()
+        render.setColor(theme.background)
+        render.drawRect(0, 0, context.width, context.height)
+        context.label(24, 22, "Counter", theme.text, titleFont)
+        context.label(24, 75, "Count: " .. tostring(context.state.count or 0))
+        render.setColor(theme.accent)
+        render.drawRect(24, 118, 216, 48)
+        context.label(42, 132, "Add one", theme.background)
+        context.label(24, 210, "Right click subtracts. R resets.")
+        context.label(24, 250, context.state.message or "", theme.muted)
+    end,
+
+    key = function(context, key, enter)
+        if enter or key == 32 then
+            context.state.count = (context.state.count or 0) + 1
+        elseif key == 114 or key == 82 then
+            context.state.count = 0
+        elseif key == 115 or key == 83 then
+            save(context)
+        end
+    end,
+
+    click = function(context, x, y, right)
+        if x >= 24 and x < 240 and y >= 118 and y < 166 then
+            context.state.count = (context.state.count or 0) + (right and -1 or 1)
+        end
+    end,
+
+    close = function(context)
+        save(context)
+    end
+}

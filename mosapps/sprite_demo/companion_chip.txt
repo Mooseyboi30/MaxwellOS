@@ -1,0 +1,83 @@
+--@name Sprite Demo Companion
+--@shared
+
+local APP_ID = "sprite_demo"
+local CHANNEL = "sprite_demo_state"
+if SERVER then
+    local enabled, rgb = false, {r=90,g=190,b=255}
+    local nextAction = 0
+    local function publish(user)
+        if net.getBytesLeft()<96 then return end
+        net.start(CHANNEL)
+        net.writeBool(enabled)
+        net.writeUInt(rgb.r,8)
+        net.writeUInt(rgb.g,8)
+        net.writeUInt(rgb.b,8)
+        net.send(user)
+    end
+    hook.add("remote","sprite_demo_service",function(sender,user,protocol,appId,action,data)
+        if appId~=APP_ID then return end
+        if protocol=="maxwellos_app_companion_discover_v1" then
+            return chip():entIndex(),"sprite","Sprite Companion"
+        end
+        if protocol~="maxwellos_app_companion_call_v1" then return end
+        if not sender or not sender:isValid() or sender:getClass()~="starfall_processor" or user~=owner() then
+            return {ok=false,error="Use a computer or demo chip owned by the companion owner."}
+        end
+        if action~="show" and action~="hide" then return {ok=false,error="Unknown sprite action."} end
+        if timer.curtime()<nextAction then return {ok=false,error="Please wait briefly."} end
+        if net.getBytesLeft()<96 then return {ok=false,error="Connection busy. Try again."} end
+        nextAction=timer.curtime()+0.2
+        if type(data)=="table" then
+            for _,channel in ipairs({"r","g","b"}) do
+                local value=data[channel]
+                if type(value)=="number" and value==value then rgb[channel]=math.floor(math.max(0,math.min(255,value))) end
+            end
+        end
+        enabled=action=="show"
+        publish()
+        return {ok=true,visible=enabled,message=enabled and "Sprite created above the companion chip." or "Sprite hidden."}
+    end)
+    hook.add("ClientInitialized","sprite_demo_sync",publish)
+    return
+end
+
+setupPermissionRequest({"hologram.create","material.create"},"Display the companion chip's sprite",true)
+local enabled, rgb = false, Color(90,190,255)
+local sprite, spriteMaterial, spriteMesh
+net.receive(CHANNEL,function()
+    enabled=net.readBool()
+    rgb=Color(net.readUInt(8),net.readUInt(8),net.readUInt(8))
+end)
+hook.add("think","sprite_demo_billboard",function()
+    if not enabled then
+        if isValid(sprite) then sprite:setNoDraw(true) end
+        return
+    end
+    if not hasPermission("hologram.create") or not hasPermission("material.create") then return end
+    if not isValid(sprite) then
+        if not hologram.canSpawn() then return end
+        if not spriteMaterial then
+            spriteMaterial=material.create("UnlitGeneric")
+            spriteMaterial:setTexture("$basetexture","sprites/light_glow02")
+            spriteMaterial:setInt("$additive",1)
+            spriteMaterial:setInt("$translucent",1)
+            spriteMaterial:setInt("$nocull",1)
+            spriteMaterial:recompute()
+            local function vertex(x,z,u,v) return {pos=Vector(x,0,z),u=u,v=v} end
+            local a,b,c,d=vertex(-16,16,0,0),vertex(16,16,1,0),vertex(16,-16,1,1),vertex(-16,-16,0,1)
+            spriteMesh=mesh.createFromTable({a,b,c,a,c,d})
+        end
+        sprite=hologram.create(chip():getPos(),Angle(),"models/holograms/cube.mdl")
+        sprite:setMesh(spriteMesh)
+        sprite:setMeshMaterial(spriteMaterial)
+        sprite:setRenderBounds(Vector(-20,-2,-20),Vector(20,2,20))
+    end
+    local position=chip():getPos()+Vector(0,0,48)
+    local facing=(eyePos()-position):getAngle()
+    facing:rotateAroundAxis(facing:getUp(),90)
+    sprite:setPos(position)
+    sprite:setAngles(facing)
+    sprite:setColor(rgb)
+    sprite:setNoDraw(false)
+end)

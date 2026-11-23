@@ -1,0 +1,118 @@
+--@shared
+-- Include this file from a shared website chip, then call the returned factory.
+-- The stable storage key determines the owner's local save filename.
+return function(storageKey)
+    assert(type(storageKey) == "string" and #storageKey <= 40
+        and storageKey:match("^[A-Za-z0-9_-]+$"), "Use a stable storage key of 1-40 letters, digits, underscores or hyphens.")
+    local prefix = "maxwellnet_store_" .. storageKey
+    local path = prefix .. ".json"
+    local store = {ready = false, status = "Waiting for the website owner", revision = 0}
+    local maximum = 16000
+
+    if SERVER then
+        local data, pending = {}, nil
+        local lastRequest = 0
+
+        function store.get(key, default)
+            assert(store.ready, "Storage is still loading")
+            local value = data[key]
+            if value == nil then return default end
+            return json.decode(json.encode(value))
+        end
+
+        function store.set(key, value)
+            if not store.ready then return false, store.status end
+            if type(key) ~= "string" or #key == 0 or #key > 64 then return false, "Invalid storage key" end
+            local candidate = {}
+            for name, item in pairs(data) do candidate[name] = item end
+            candidate[key] = value
+            local ok, encoded = pcall(json.encode, candidate)
+            if not ok or type(encoded) ~= "string" or #encoded > maximum then
+                return false, "Save must be JSON data under 16000 bytes"
+            end
+            data = json.decode(encoded)
+            store.revision = store.revision + 1
+            pending = encoded
+            store.status = "Saving"
+            return true
+        end
+
+        function store.delete(key)
+            return store.set(key, nil)
+        end
+
+        net.receive(prefix .. "_loaded", function(_, user)
+            if user ~= owner() or store.ready then return end
+            local ok, encoded = net.readBool(), net.readString()
+            if not ok then store.status = encoded:sub(1, 120); return end
+            if #encoded > maximum then store.status = "Save exceeds storage limit"; return end
+            local decoded, value = pcall(json.decode, encoded)
+            if not decoded or type(value) ~= "table" then store.status = "Saved data is corrupt"; return end
+            data, store.ready, store.status = value, true, "Saved"
+        end)
+
+        net.receive(prefix .. "_saved", function(_, user)
+            if user ~= owner() then return end
+            local revision, ok = net.readUInt(32), net.readBool()
+            if revision ~= store.revision then return end
+            if ok then
+                pending, store.status = nil, "Saved"
+            else
+                store.status = "Save failed. Check the owner's file permissions."
+            end
+        end)
+
+        timer.create(prefix, 2, 0, function()
+            local host = owner()
+            if not host or not host:isValid() then store.status = "Website owner offline"; return end
+            if not store.ready then
+                if net.getBytesLeft() < 128 then return end
+                net.start(prefix .. "_load")
+                net.send(host)
+            elseif pending and timer.curtime() - lastRequest >= 2 then
+                if net.getBytesLeft() < #pending + 128 then return end
+                lastRequest = timer.curtime()
+                net.start(prefix .. "_save")
+                net.writeUInt(store.revision, 32)
+                net.writeString(pending)
+                net.send(host)
+            end
+        end)
+    else
+        if player() ~= owner() then return store end
+        setupPermissionRequest({"file.exists", "file.read", "file.write"},
+            "Save this MaxwellNET website on your computer", true)
+
+        net.receive(prefix .. "_load", function()
+            local ok, result = pcall(function()
+                if file.exists(path) then return file.read(path) end
+                return "{}"
+            end)
+            if type(result) ~= "string" or #result > maximum then
+                ok, result = false, "Unable to read save or save exceeds storage limit"
+            end
+            if not ok then result = "Grant file access to load website data" end
+            if net.getBytesLeft() < #result + 128 then return end
+            net.start(prefix .. "_loaded")
+            net.writeBool(ok)
+            net.writeString(result)
+            net.send()
+        end)
+
+        net.receive(prefix .. "_save", function()
+            local revision, encoded = net.readUInt(32), net.readString()
+            local valid, value = pcall(json.decode, encoded)
+            if #encoded > maximum or not valid or type(value) ~= "table" then return end
+            local ok = pcall(function()
+                file.write(path, encoded)
+                assert(file.read(path) == encoded, "Save verification failed")
+            end)
+            if net.getBytesLeft() < 128 then return end
+            net.start(prefix .. "_saved")
+            net.writeUInt(revision, 32)
+            net.writeBool(ok)
+            net.send()
+        end)
+    end
+    return store
+end

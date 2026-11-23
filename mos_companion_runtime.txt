@@ -1,0 +1,256 @@
+--@shared
+-- Hosted companion modules share this processor's Starfall permissions and quota.
+local runtime={entries={},clock=timer.curtime()}
+local function identifier(value)
+    return type(value)=="string" and #value>0 and #value<=40 and value:match("^[A-Za-z0-9_-]+$")~=nil
+end
+local function cleanup(entry)
+    if entry and type(entry.module.close)=="function" then pcall(entry.module.close,entry.api) end
+end
+local function invoke(entry,method,...)
+    if entry.error then return false,entry.error end
+    local fn=entry.module[method]
+    if type(fn)~="function" then return true end
+    local ok,value=pcall(fn,entry.api,...)
+    if not ok then entry.error=tostring(value):sub(1,160);cleanup(entry) end
+    return ok,value
+end
+local function compile(appId,slot,source,state)
+    local entry={appId=appId,slot=slot,source=source}
+    local api={state=state or {},localState={}}
+    entry.api=api
+    api.position=function() return chip():getPos() end
+    api.publish=function()
+        assert(SERVER,"Only server companion modules publish state")
+        local encoded=json.encode(api.state)
+        assert(type(encoded)=="string" and #encoded<=4096,"Companion state exceeds 4096 bytes")
+        entry.encoded,entry.dirty=encoded,true
+    end
+    local environment={
+        SERVER=SERVER,CLIENT=not SERVER,
+        assert=assert,error=error,pcall=pcall,pairs=pairs,ipairs=ipairs,next=next,
+        type=type,tonumber=tonumber,tostring=tostring,select=select,unpack=unpack,
+        setmetatable=setmetatable,getmetatable=getmetatable,
+        math=math,string=string,table=table,json=json,
+        Color=Color,Vector=Vector,Angle=Angle,isValid=isValid,
+        chip=chip,owner=owner,player=player,eyePos=eyePos,
+        hologram=hologram,mesh=mesh,material=material,prop=prop,find=find,entity=entity,
+        hasPermission=hasPermission,timer={curtime=timer.curtime},print=print
+    }
+    environment._G=environment
+    local chunk,err=loadstring(source,"mosapps/"..appId.."/"..slot,environment)
+    if not chunk then return nil,tostring(err) end
+    local ok,module=pcall(chunk,api)
+    if not ok then return nil,tostring(module) end
+    if type(module)~="table" or not identifier(module.role) or type(module.name)~="string" then
+        return nil,"A companion module must return role and name."
+    end
+    entry.module,entry.role,entry.name=module,module.role,module.name:gsub("%c"," "):sub(1,48)
+    local initialized,value=invoke(entry,"init")
+    if not initialized then return nil,value end
+    if SERVER then
+        local published,message=pcall(api.publish)
+        if not published then cleanup(entry);return nil,tostring(message) end
+    end
+    return entry
+end
+
+if SERVER then
+    local nextInstall=0
+    local generations,removedApps={},{}
+    local function receipt(ticket,appId,slot,ok,role,message)
+        if net.getBytesLeft()<320 then return end
+        net.start("mos_auto_receipt")
+        net.writeUInt(ticket,32)
+        net.writeString(appId)
+        net.writeString(slot)
+        net.writeBool(ok)
+        net.writeString(role or "")
+        net.writeString((message or ""):sub(1,160))
+        net.send(owner())
+    end
+    net.receive("mos_auto_install",function(_,user)
+        if user~=owner() then return end
+        local ticket,appId,slot=net.readUInt(32),net.readString(),net.readString()
+        if not identifier(appId) or #slot>120 or timer.curtime()<nextInstall or not net.canReadStream() then
+            receipt(ticket,appId,slot,false,nil,"Companion installer is busy. Reopen the app to retry.")
+            return
+        end
+        nextInstall=timer.curtime()+0.2
+        local generation=generations[appId] or 0
+        net.readStream(function(source)
+            if (generations[appId] or 0)~=generation then receipt(ticket,appId,slot,false,nil,"App disabled during installation.");return end
+            if type(source)~="string" or #source<1 or #source>65536 then
+                receipt(ticket,appId,slot,false,nil,"Companion transfer failed or source exceeds 65536 bytes.");return
+            end
+            local key=appId.."/"..slot
+            local previous=runtime.entries[key]
+            if previous and previous.source==source and not previous.error then
+                previous.broadcast=true
+                receipt(ticket,appId,slot,true,previous.role)
+                return
+            end
+            local count=0
+            for _ in pairs(runtime.entries) do count=count+1 end
+            if not previous and count>=16 then receipt(ticket,appId,slot,false,nil,"Hosted companion limit reached.");return end
+            local state={}
+            if previous then
+                local ok,value=pcall(function() return json.decode(json.encode(previous.api.state)) end)
+                if ok and type(value)=="table" then state=value end
+            end
+            local ok,entry,err=pcall(compile,appId,slot,source,state)
+            if not ok then err,entry=entry,nil end
+            if not entry then receipt(ticket,appId,slot,false,nil,tostring(err));return end
+            for otherKey,other in pairs(runtime.entries) do
+                if otherKey~=key and other.appId==appId and other.role==entry.role then
+                    cleanup(entry);receipt(ticket,appId,slot,false,nil,"Duplicate hosted companion role.");return
+                end
+            end
+            cleanup(previous)
+            entry.broadcast=true
+            runtime.entries[key]=entry
+            receipt(ticket,appId,slot,true,entry.role)
+        end)
+    end)
+    net.receive("mos_auto_remove",function(_,user)
+        if user~=owner() then return end
+        local appId=net.readString()
+        if not identifier(appId) then return end
+        generations[appId]=(generations[appId] or 0)+1
+        for key,entry in pairs(runtime.entries) do
+            if entry.appId==appId then cleanup(entry);runtime.entries[key]=nil end
+        end
+        removedApps[appId]=true
+    end)
+    function runtime.find(appId,role)
+        local list={}
+        for _,entry in pairs(runtime.entries) do
+            if entry.appId==appId and (role=="" or role==entry.role) then
+                list[#list+1]={id="local:"..entry.role,role=entry.role,name=entry.name,hosted=true}
+            end
+        end
+        return list
+    end
+    function runtime.call(appId,role,action,payload)
+        for _,entry in pairs(runtime.entries) do
+            if entry.appId==appId and entry.role==role then
+                local ok,value=invoke(entry,"request",action,payload)
+                if not ok then return false,{error=tostring(value)} end
+                return true,value==nil and {} or value
+            end
+        end
+        return false,{error="Hosted companion is unavailable. Reopen the app."}
+    end
+    hook.add("ClientInitialized","mos_auto_services",function()
+        for _,entry in pairs(runtime.entries) do entry.broadcast=true end
+    end)
+    local nextPump=0
+    hook.add("think","mos_auto_service_network",function()
+        if timer.curtime()<nextPump or net.getBytesLeft()<128 then return end
+        nextPump=timer.curtime()+0.2
+        for appId in pairs(removedApps) do
+            net.start("mos_auto_unload");net.writeString(appId);net.send()
+            removedApps[appId]=nil;return
+        end
+        for key,entry in pairs(runtime.entries) do
+            if entry.broadcast and net.canWriteStream() and net.getBytesLeft()>=#(entry.encoded or "{}")+#key*2+256 then
+                net.start("mos_auto_client")
+                net.writeString(key)
+                net.writeString(entry.appId)
+                net.writeString(entry.slot)
+                net.writeString(entry.encoded or "{}")
+                net.writeStream(entry.source,false)
+                net.send()
+                entry.broadcast,entry.dirty=false,false
+                return
+            elseif not entry.broadcast and entry.dirty and net.getBytesLeft()>=#(entry.encoded or "{}")+#key+96 then
+                net.start("mos_auto_state")
+                net.writeString(key)
+                net.writeString(entry.encoded or "{}")
+                net.send()
+                entry.dirty=false
+                return
+            end
+        end
+    end)
+    local nextSync={}
+    net.receive("mos_auto_resync",function(_,user)
+        if timer.curtime()<(nextSync[user] or 0) then return end
+        nextSync[user]=timer.curtime()+5
+        for _,entry in pairs(runtime.entries) do entry.broadcast=true end
+    end)
+else
+    local removeQueue={}
+    local function removeLocal(appId)
+        for key,entry in pairs(runtime.entries) do if entry.appId==appId then cleanup(entry);runtime.entries[key]=nil end end
+    end
+    function runtime.remove(appId)
+        if not identifier(appId) then return false end
+        removeLocal(appId);removeQueue[appId]=true;return true
+    end
+    net.receive("mos_auto_unload",function() removeLocal(net.readString()) end)
+    hook.add("think","mos_auto_remove",function()
+        if net.getBytesLeft()<128 then return end
+        for appId in pairs(removeQueue) do
+            net.start("mos_auto_remove");net.writeString(appId);net.send();removeQueue[appId]=nil;return
+        end
+    end)
+    function runtime.upload(appId,slot,source,ticket)
+        local reading,writing=net.isStreaming()
+        if reading or writing or not net.canWriteStream() or net.getBytesLeft()<256 then return false end
+        net.start("mos_auto_install")
+        net.writeUInt(ticket,32)
+        net.writeString(appId)
+        net.writeString(slot)
+        net.writeStream(source,false)
+        net.send()
+        return true
+    end
+    net.receive("mos_auto_receipt",function()
+        local ticket,appId,slot=net.readUInt(32),net.readString(),net.readString()
+        local ok,role,message=net.readBool(),net.readString(),net.readString()
+        if runtime.onInstalled then runtime.onInstalled(ticket,appId,slot,ok,role,message) end
+    end)
+    local retrySync,nextResync=false,0
+    net.receive("mos_auto_client",function()
+        local key,appId,slot,encoded=net.readString(),net.readString(),net.readString(),net.readString()
+        if not net.canReadStream() then retrySync=true;return end
+        net.readStream(function(source)
+            if type(source)~="string" or #source>65536 or #encoded>4096 then retrySync=true;return end
+            local decoded,state=pcall(json.decode,encoded)
+            if not decoded or type(state)~="table" then return end
+            local previous=runtime.entries[key]
+            if previous and previous.source==source and not previous.error then previous.api.state=state;return end
+            local ok,entry=pcall(compile,appId,slot,source,state)
+            if not ok or not entry then retrySync=true;return end
+            cleanup(previous)
+            runtime.entries[key]=entry
+        end)
+    end)
+    net.receive("mos_auto_state",function()
+        local key,encoded=net.readString(),net.readString()
+        local entry=runtime.entries[key]
+        if not entry then retrySync=true;return end
+        if #encoded>4096 then return end
+        local ok,state=pcall(json.decode,encoded)
+        if ok and type(state)=="table" then entry.api.state=state end
+    end)
+    hook.add("think","mos_auto_resync",function()
+        if retrySync and timer.curtime()>=nextResync and net.getBytesLeft()>=64 then
+            nextResync=timer.curtime()+5
+            retrySync=false
+            net.start("mos_auto_resync");net.send()
+        end
+    end)
+end
+
+hook.add("think","mos_auto_services_update",function()
+    local now=timer.curtime()
+    local dt=math.min(0.05,math.max(0,now-runtime.clock))
+    runtime.clock=now
+    for _,entry in pairs(runtime.entries) do invoke(entry,"update",dt,now) end
+end)
+hook.add("removed","mos_auto_services_cleanup",function()
+    for _,entry in pairs(runtime.entries) do cleanup(entry) end
+end)
+return runtime

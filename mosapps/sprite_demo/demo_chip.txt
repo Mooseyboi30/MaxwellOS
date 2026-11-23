@@ -1,0 +1,81 @@
+--@name Sprite Demo Button Screen
+--@shared
+--@include runtime.txt
+--@includedata companion.txt
+local runtime=require("runtime.txt")
+local CHANNEL="sprite_demo_button"
+if SERVER then
+    local nextClick=0
+    net.receive(CHANNEL,function(_,user)
+        if user~=owner() or timer.curtime()<nextClick or net.getBytesLeft()<256 then return end
+        local screen=entity(net.readUInt(16))
+        local show=net.readBool()
+        if not screen or not screen:isValid() or user:getEyeTrace().Entity~=screen
+            or user:getEyePos():getDistance(screen:getPos())>200 then return end
+        local linked=false
+        for _,component in ipairs(chip():getLinkedComponents()) do if component==screen then linked=true; break end end
+        if not linked then return end
+        nextClick=timer.curtime()+0.3
+        local ok,result=runtime.call("sprite_demo","sprite",show and "show" or "hide",{r=90,g=190,b=255})
+        local message=ok and type(result)=="table" and (result.message or result.error) or "Companion module is loading. Try again shortly."
+        net.start(CHANNEL)
+        net.writeString(message:sub(1,150))
+        net.send(user)
+    end)
+    return
+end
+local font=render.createFont("Roboto",24,700)
+local small=render.createFont("Roboto",16,500)
+local status="Loading the companion module..."
+setupPermissionRequest({"hologram.create","material.create"},"Display the demo sprite",true)
+if player()==owner() then
+    local source
+    for path,code in pairs(getScripts()) do
+        if path=="companion.txt" or path:sub(-14)=="/companion.txt" then source=code;break end
+    end
+    local sent,done,nextAttempt=false,false,0
+    local deadline=0
+    runtime.onInstalled=function(ticket,appId,slot,ok,role,message)
+        done=ok
+        if ok then status="Ready. Press E on Create sprite." end
+        if not ok then sent=false;status=message;nextAttempt=timer.curtime()+3 end
+    end
+    hook.add("think","sprite_demo_auto_load",function()
+        if sent and not done and timer.curtime()>=deadline then sent=false;nextAttempt=timer.curtime()+3 end
+        if done or sent or not source or timer.curtime()<nextAttempt then return end
+        if runtime.upload("sprite_demo","companion.txt",source,1) then
+            sent=true
+            deadline=timer.curtime()+45
+            status="Loading the companion module..."
+        end
+    end)
+end
+net.receive(CHANNEL,function() status=net.readString() end)
+hook.add("render","sprite_demo_buttons",function()
+    render.setColor(Color(18,27,41))
+    render.drawRect(0,0,512,512)
+    render.setFont(font)
+    render.setColor(Color(235,245,255))
+    render.drawText(32,40,"Companion Sprite Demo")
+    for i,text in ipairs({"Create sprite","Hide sprite"}) do
+        local y=160+(i-1)*80
+        render.setColor(Color(39,115,153))
+        render.drawRect(64,y,384,56)
+        render.setColor(Color(240,250,255))
+        render.drawText(84,y+14,text)
+    end
+    render.setFont(small)
+    render.drawText(24,390,status)
+end)
+hook.add("StarfallUsed","sprite_demo_click",function(user,screen)
+    if user~=player() or not screen or not screen:isValid() or screen:getClass()~="starfall_screen" then return end
+    local x,y=render.cursorPos(user,screen)
+    if not x or not y or x<64 or x>=448 then return end
+    local show=y>=160 and y<216
+    if not show and not (y>=240 and y<296) then return end
+    if net.getBytesLeft()<64 then return end
+    net.start(CHANNEL)
+    net.writeUInt(screen:entIndex(),16)
+    net.writeBool(show)
+    net.send()
+end)

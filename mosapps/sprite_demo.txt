@@ -1,0 +1,66 @@
+local ui = {
+    button = function(api, x, y, text)
+        render.setColor(api.theme().accent)
+        render.drawRect(x, y, 200, 44)
+        api.label(x + 12, y + 12, text, api.theme().background)
+    end
+}
+local function discover(api)
+    local ticket, err = api.findCompanions("sprite")
+    if ticket then api.state.discovery = ticket end
+    api.state.status = ticket and "Looking for sprite modules..." or err
+end
+local function command(api, action)
+    local target = api.companions[api.state.selected or 1]
+    if not target then api.state.status = "Companion module is loading. Press R to retry."; return end
+    local color = api.theme().accent
+    local ticket, err = api.callCompanion(target.id, action, {r=color.r,g=color.g,b=color.b})
+    api.state.status = ticket and "Waiting for companion..." or err
+end
+return {
+    id = "sprite_demo",
+    fallback = true,
+    companion = "sprite_demo/companion.txt",
+    name = "Sprite Demo",
+    description = "Loads a companion module and creates a sprite",
+    open = function(api)
+        api.state.selected = api.state.selected or 1
+        discover(api)
+    end,
+    reply = function(api, ticket, ok, result, err)
+        if not ok then api.state.status = err or "Companion request failed."; return end
+        if ticket == api.state.discovery then
+            api.state.selected = math.max(1,math.min(api.state.selected,#api.companions))
+            api.state.status = #api.companions>0 and "Companion ready." or "No sprite module response. Reopen the app to retry."
+        elseif type(result)=="table" then
+            api.state.status = result.message or result.error or "Companion replied."
+        end
+    end,
+    draw = function(api)
+        local theme = api.theme()
+        render.setColor(theme.background)
+        render.drawRect(0,0,api.width,api.height)
+        api.label(24,22,"Companion Sprite Demo")
+        local target = api.companions[api.state.selected or 1]
+        api.label(24,66,target and (target.name..(type(target.id)=="number" and " #"..target.id or "")) or "No companion selected",theme.muted)
+        ui.button(api,24,112,"Create sprite")
+        ui.button(api,252,112,"Hide sprite")
+        local lines = api.wrap(api.state.status or "",430)
+        for i,line in ipairs(lines) do api.label(24,196+(i-1)*20,line) end
+        api.label(24,300,"Enter creates | Space hides | R reloads app",theme.muted)
+        api.label(24,330,"Left/Right chooses a companion",theme.muted)
+    end,
+    key = function(api,key,enter)
+        if enter then command(api,"show")
+        elseif key==32 then command(api,"hide")
+        elseif key==114 or key==82 then api.reload()
+        elseif key==19 then api.state.selected=math.max(1,(api.state.selected or 1)-1)
+        elseif key==20 then api.state.selected=math.min(#api.companions,(api.state.selected or 1)+1) end
+    end,
+    click = function(api,x,y,right)
+        if y>=112 and y<156 then
+            if x>=24 and x<224 then command(api,"show")
+            elseif x>=252 and x<452 then command(api,"hide") end
+        end
+    end
+}
