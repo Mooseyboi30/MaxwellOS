@@ -1,7 +1,7 @@
 --@name MaxwellOS Phone
 --@shared
-local CHIP_VERSION = "50.3"
-local CHATROOM_VERSION = "50.3"
+local CHIP_VERSION = "50.4"
+local CHATROOM_VERSION = "50.4"
 -- Companion runtime is bundled so the standalone phone uploads as one file.
 local MOS_SERVICES=(function()
 -- Hosted companion modules share this processor's Starfall permissions and quota.

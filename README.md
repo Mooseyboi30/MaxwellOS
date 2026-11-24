@@ -2,12 +2,12 @@
 
 A Starfall desktop for Garry's Mod with local apps, chatrooms, MaxwellNET websites, games, Paint and music.
 
-Computer and chatroom server: **v50.3**. The standalone phone uses the same release version and includes the current shared desktop features.
+Computer and chatroom server: **v50.4**. The standalone phone uses the same release version and includes the current shared desktop features.
 
 ## Install
 
 1. Download the repository ZIP and extract it. Copy the chip files into `garrysmod/data/starfall/MaxwellOS` using their existing filenames.
-2. For the computer, keep **both** `mos_companion_runtime.txt` and `mos_desktop_tools.txt` beside `starfall_chatroom_computer.txt`. Upload the computer and link a Starfall screen. Upload files through the editor rather than pasting only the main script, so its includes are collected.
+2. Upload `starfall_chatroom_computer.txt` and link a Starfall screen. The computer bundles its helpers and needs no separate runtime or desktop-helper files.
 3. Optionally wire a Wiremod Keyboard's key array and User outputs to `KeyboardKeys` and `KeyboardUser`. The `Power` input turns the computer off at 0.
 4. Upload `starfall_chatroom_server.txt` to host a chatroom, or a website chip to publish a MaxwellNET site. Website Viewer works without joining a chatroom.
 5. Alternatively, upload `maxwellos_phone.txt` for the standalone phone. Its shared helpers are bundled, so it needs no extra include files. Compass and TTS are phone-only features.
@@ -16,7 +16,7 @@ Grant Starfall permissions when prompted. Reupload a chip after updating its sou
 
 | File | Purpose |
 | --- | --- |
-| [Computer](starfall_chatroom_computer.txt) | Main desktop; requires the two helpers above |
+| [Computer](starfall_chatroom_computer.txt) | Self-contained main desktop |
 | [Chatroom server](starfall_chatroom_server.txt) | Rooms, channels, moderation, multiplayer services and saved server data |
 | [Standalone phone](maxwellos_phone.txt) | Portable desktop with phone-specific additions |
 | [Demo](starfall_computer_demo.txt) | Standalone offline demonstration |

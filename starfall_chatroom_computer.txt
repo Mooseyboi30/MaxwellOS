@@ -1,13 +1,269 @@
 --@name Chatroom Computer
 --@shared
---@include mos_companion_runtime.txt
---@include mos_desktop_tools.txt
+local CHIP_VERSION = "50.4"
 
-local MOS_SERVICES=require("mos_companion_runtime.txt")
+local MOS_SERVICES=(function()
+-- Hosted companion modules share this processor's Starfall permissions and quota.
+local runtime={entries={},clock=timer.curtime()}
+local function identifier(value)
+    return type(value)=="string" and #value>0 and #value<=40 and value:match("^[A-Za-z0-9_-]+$")~=nil
+end
+local function cleanup(entry)
+    if entry and type(entry.module.close)=="function" then pcall(entry.module.close,entry.api) end
+end
+local function invoke(entry,method,...)
+    if entry.error then return false,entry.error end
+    local fn=entry.module[method]
+    if type(fn)~="function" then return true end
+    local ok,value=pcall(fn,entry.api,...)
+    if not ok then entry.error=tostring(value):sub(1,160);cleanup(entry) end
+    return ok,value
+end
+local function compile(appId,slot,source,state)
+    local entry={appId=appId,slot=slot,source=source}
+    local api={state=state or {},localState={}}
+    entry.api=api
+    api.position=function() return chip():getPos() end
+    api.publish=function()
+        assert(SERVER,"Only server companion modules publish state")
+        local encoded=json.encode(api.state)
+        assert(type(encoded)=="string" and #encoded<=4096,"Companion state exceeds 4096 bytes")
+        entry.encoded,entry.dirty=encoded,true
+    end
+    local environment={
+        SERVER=SERVER,CLIENT=not SERVER,
+        assert=assert,error=error,pcall=pcall,pairs=pairs,ipairs=ipairs,next=next,
+        type=type,tonumber=tonumber,tostring=tostring,select=select,unpack=unpack,
+        setmetatable=setmetatable,getmetatable=getmetatable,
+        math=math,string=string,table=table,json=json,
+        Color=Color,Vector=Vector,Angle=Angle,isValid=isValid,
+        chip=chip,owner=owner,player=player,eyePos=eyePos,
+        hologram=hologram,mesh=mesh,material=material,prop=prop,find=find,entity=entity,
+        hasPermission=hasPermission,timer={curtime=timer.curtime},print=print
+    }
+    environment._G=environment
+    local chunk,err=loadstring(source,"mosapps/"..appId.."/"..slot,environment)
+    if not chunk then return nil,tostring(err) end
+    local ok,module=pcall(chunk,api)
+    if not ok then return nil,tostring(module) end
+    if type(module)~="table" or not identifier(module.role) or type(module.name)~="string" then
+        return nil,"A companion module must return role and name."
+    end
+    entry.module,entry.role,entry.name=module,module.role,module.name:gsub("%c"," "):sub(1,48)
+    local initialized,value=invoke(entry,"init")
+    if not initialized then return nil,value end
+    if SERVER then
+        local published,message=pcall(api.publish)
+        if not published then cleanup(entry);return nil,tostring(message) end
+    end
+    return entry
+end
 
-local CHIP_VERSION = "50.3"
+if SERVER then
+    local nextInstall=0
+    local generations,removedApps={},{}
+    local function receipt(ticket,appId,slot,ok,role,message)
+        if net.getBytesLeft()<320 then return end
+        net.start("mos_auto_receipt")
+        net.writeUInt(ticket,32)
+        net.writeString(appId)
+        net.writeString(slot)
+        net.writeBool(ok)
+        net.writeString(role or "")
+        net.writeString((message or ""):sub(1,160))
+        net.send(owner())
+    end
+    net.receive("mos_auto_install",function(_,user)
+        if user~=owner() then return end
+        local ticket,appId,slot=net.readUInt(32),net.readString(),net.readString()
+        if not identifier(appId) or #slot>120 or timer.curtime()<nextInstall or not net.canReadStream() then
+            receipt(ticket,appId,slot,false,nil,"Companion installer is busy. Reopen the app to retry.")
+            return
+        end
+        nextInstall=timer.curtime()+0.2
+        local generation=generations[appId] or 0
+        net.readStream(function(source)
+            if (generations[appId] or 0)~=generation then receipt(ticket,appId,slot,false,nil,"App disabled during installation.");return end
+            if type(source)~="string" or #source<1 or #source>65536 then
+                receipt(ticket,appId,slot,false,nil,"Companion transfer failed or source exceeds 65536 bytes.");return
+            end
+            local key=appId.."/"..slot
+            local previous=runtime.entries[key]
+            if previous and previous.source==source and not previous.error then
+                previous.broadcast=true
+                receipt(ticket,appId,slot,true,previous.role)
+                return
+            end
+            local count=0
+            for _ in pairs(runtime.entries) do count=count+1 end
+            if not previous and count>=16 then receipt(ticket,appId,slot,false,nil,"Hosted companion limit reached.");return end
+            local state={}
+            if previous then
+                local ok,value=pcall(function() return json.decode(json.encode(previous.api.state)) end)
+                if ok and type(value)=="table" then state=value end
+            end
+            local ok,entry,err=pcall(compile,appId,slot,source,state)
+            if not ok then err,entry=entry,nil end
+            if not entry then receipt(ticket,appId,slot,false,nil,tostring(err));return end
+            for otherKey,other in pairs(runtime.entries) do
+                if otherKey~=key and other.appId==appId and other.role==entry.role then
+                    cleanup(entry);receipt(ticket,appId,slot,false,nil,"Duplicate hosted companion role.");return
+                end
+            end
+            cleanup(previous)
+            entry.broadcast=true
+            runtime.entries[key]=entry
+            receipt(ticket,appId,slot,true,entry.role)
+        end)
+    end)
+    net.receive("mos_auto_remove",function(_,user)
+        if user~=owner() then return end
+        local appId=net.readString()
+        if not identifier(appId) then return end
+        generations[appId]=(generations[appId] or 0)+1
+        for key,entry in pairs(runtime.entries) do
+            if entry.appId==appId then cleanup(entry);runtime.entries[key]=nil end
+        end
+        removedApps[appId]=true
+    end)
+    function runtime.find(appId,role)
+        local list={}
+        for _,entry in pairs(runtime.entries) do
+            if entry.appId==appId and (role=="" or role==entry.role) then
+                list[#list+1]={id="local:"..entry.role,role=entry.role,name=entry.name,hosted=true}
+            end
+        end
+        return list
+    end
+    function runtime.call(appId,role,action,payload)
+        for _,entry in pairs(runtime.entries) do
+            if entry.appId==appId and entry.role==role then
+                local ok,value=invoke(entry,"request",action,payload)
+                if not ok then return false,{error=tostring(value)} end
+                return true,value==nil and {} or value
+            end
+        end
+        return false,{error="Hosted companion is unavailable. Reopen the app."}
+    end
+    hook.add("ClientInitialized","mos_auto_services",function()
+        for _,entry in pairs(runtime.entries) do entry.broadcast=true end
+    end)
+    local nextPump=0
+    hook.add("think","mos_auto_service_network",function()
+        if timer.curtime()<nextPump or net.getBytesLeft()<128 then return end
+        nextPump=timer.curtime()+0.2
+        for appId in pairs(removedApps) do
+            net.start("mos_auto_unload");net.writeString(appId);net.send()
+            removedApps[appId]=nil;return
+        end
+        for key,entry in pairs(runtime.entries) do
+            if entry.broadcast and net.canWriteStream() and net.getBytesLeft()>=#(entry.encoded or "{}")+#key*2+256 then
+                net.start("mos_auto_client")
+                net.writeString(key)
+                net.writeString(entry.appId)
+                net.writeString(entry.slot)
+                net.writeString(entry.encoded or "{}")
+                net.writeStream(entry.source,false)
+                net.send()
+                entry.broadcast,entry.dirty=false,false
+                return
+            elseif not entry.broadcast and entry.dirty and net.getBytesLeft()>=#(entry.encoded or "{}")+#key+96 then
+                net.start("mos_auto_state")
+                net.writeString(key)
+                net.writeString(entry.encoded or "{}")
+                net.send()
+                entry.dirty=false
+                return
+            end
+        end
+    end)
+    local nextSync={}
+    net.receive("mos_auto_resync",function(_,user)
+        if timer.curtime()<(nextSync[user] or 0) then return end
+        nextSync[user]=timer.curtime()+5
+        for _,entry in pairs(runtime.entries) do entry.broadcast=true end
+    end)
+else
+    local removeQueue={}
+    local function removeLocal(appId)
+        for key,entry in pairs(runtime.entries) do if entry.appId==appId then cleanup(entry);runtime.entries[key]=nil end end
+    end
+    function runtime.remove(appId)
+        if not identifier(appId) then return false end
+        removeLocal(appId);removeQueue[appId]=true;return true
+    end
+    net.receive("mos_auto_unload",function() removeLocal(net.readString()) end)
+    hook.add("think","mos_auto_remove",function()
+        if net.getBytesLeft()<128 then return end
+        for appId in pairs(removeQueue) do
+            net.start("mos_auto_remove");net.writeString(appId);net.send();removeQueue[appId]=nil;return
+        end
+    end)
+    function runtime.upload(appId,slot,source,ticket)
+        local reading,writing=net.isStreaming()
+        if reading or writing or not net.canWriteStream() or net.getBytesLeft()<256 then return false end
+        net.start("mos_auto_install")
+        net.writeUInt(ticket,32)
+        net.writeString(appId)
+        net.writeString(slot)
+        net.writeStream(source,false)
+        net.send()
+        return true
+    end
+    net.receive("mos_auto_receipt",function()
+        local ticket,appId,slot=net.readUInt(32),net.readString(),net.readString()
+        local ok,role,message=net.readBool(),net.readString(),net.readString()
+        if runtime.onInstalled then runtime.onInstalled(ticket,appId,slot,ok,role,message) end
+    end)
+    local retrySync,nextResync=false,0
+    net.receive("mos_auto_client",function()
+        local key,appId,slot,encoded=net.readString(),net.readString(),net.readString(),net.readString()
+        if not net.canReadStream() then retrySync=true;return end
+        net.readStream(function(source)
+            if type(source)~="string" or #source>65536 or #encoded>4096 then retrySync=true;return end
+            local decoded,state=pcall(json.decode,encoded)
+            if not decoded or type(state)~="table" then return end
+            local previous=runtime.entries[key]
+            if previous and previous.source==source and not previous.error then previous.api.state=state;return end
+            local ok,entry=pcall(compile,appId,slot,source,state)
+            if not ok or not entry then retrySync=true;return end
+            cleanup(previous)
+            runtime.entries[key]=entry
+        end)
+    end)
+    net.receive("mos_auto_state",function()
+        local key,encoded=net.readString(),net.readString()
+        local entry=runtime.entries[key]
+        if not entry then retrySync=true;return end
+        if #encoded>4096 then return end
+        local ok,state=pcall(json.decode,encoded)
+        if ok and type(state)=="table" then entry.api.state=state end
+    end)
+    hook.add("think","mos_auto_resync",function()
+        if retrySync and timer.curtime()>=nextResync and net.getBytesLeft()>=64 then
+            nextResync=timer.curtime()+5
+            retrySync=false
+            net.start("mos_auto_resync");net.send()
+        end
+    end)
+end
+
+hook.add("think","mos_auto_services_update",function()
+    local now=timer.curtime()
+    local dt=math.min(0.05,math.max(0,now-runtime.clock))
+    runtime.clock=now
+    for _,entry in pairs(runtime.entries) do invoke(entry,"update",dt,now) end
+end)
+hook.add("removed","mos_auto_services_cleanup",function()
+    for _,entry in pairs(runtime.entries) do cleanup(entry) end
+end)
+return runtime
+
+end)()
+
 -- Get matching chip versions at https://github.com/Mooseyboi30/MaxwellOS
 local CHANGELOG = {
+    {"v50.4", "Computer now uploads as one self-contained chip with its app and desktop helpers bundled."},
     {"v50.3", "Added App Manager, search, saved desktop order and pins, notifications and quiet mode, profile transfer, Wire Dashboard, two app windows and Paint history/shapes. Taskbar icons now show running apps, highlight focus and restore windows without listing inactive app history. Ctrl now toggles Desktop/last app on physical and Wire keyboards."},
     {"v49.1", "Fixed Website Maker discovery and page loading, queued network replies, Retry status, and export metadata accidentally renaming the host chip. Generated sites keep their own name directives."},
     {"v49.0", "Added mosapps packages, helpers, automatic companions and Sprite Demo. Improved folder discovery, package errors and queued companion replies. Desktop scans once at startup; press R or the taskbar R button to refresh installed apps manually. R inside Sprite Demo reloads that app."},
@@ -4344,7 +4600,657 @@ local function changeGameTab(tab)
 end
 
 PHONE.toolsFont=render.createFont("Roboto",14,500)
-PHONE.tools=require("mos_desktop_tools.txt")({
+PHONE.tools=(function()
+-- Client desktop extensions. The host supplies its existing app and input callbacks.
+return function(C)
+    local T={all={},query="",selected=1,top=1,windows={},focus=0,nextWindow=0,notes={},seen={},message="",undo={},redo={}}
+    local state={order={},pins={},disabled={},dnd=false}
+    local function clean(s,n) return tostring(s or ""):gsub("%c"," "):sub(1,n or 80) end
+    local function readJSON(path,limit)
+        local ok,text=pcall(file.read,path)
+        if not ok or type(text)~="string" or #text>(limit or 32768) then return nil end
+        local decoded,value=pcall(json.decode,text)
+        return decoded and type(value)=="table" and value or nil
+    end
+    local function save(path,value)
+        local ok=pcall(function() file.write(path,json.encode(value)) end)
+        if not ok then T.message="Could not save. Grant file access." end
+        return ok
+    end
+    local function theme() return C.theme() end
+    local function text(x,y,s,color,width)
+        local lines=C.wrap(clean(s,120),width or math.max(16,504-x))
+        local line=lines[1] or ""
+        if #lines>1 then line=line:sub(1,math.max(1,#line-3)).."..." end
+        C.label(x,y,line,color or theme().text)
+    end
+    local function button(x,y,w,s,on)
+        render.setColor(on and theme().accent or theme().panel);render.drawRect(x,y,w,30)
+        local padding=math.min(7,math.floor(w/6))
+        text(x+padding,y+7,s,on and theme().background or theme().text,w-padding*2)
+    end
+    local function inside(x,y,l,t,w,h) return x>=l and x<l+w and y>=t and y<t+h end
+    function T.loadSettings()
+        local data=readJSON("maxwellos_desktop.json")
+        if data then
+            for _,key in ipairs({"order","pins","disabled"}) do if type(data[key])=="table" then state[key]=data[key] end end
+            local pins,order,disabled={},{},{}
+            for i=1,math.min(5,#state.pins) do if type(state.pins[i])=="string" then pins[#pins+1]=state.pins[i] end end
+            for i=1,math.min(256,#state.order) do if type(state.order[i])=="string" then order[#order+1]=state.order[i] end end
+            for id,value in pairs(state.disabled) do if type(id)=="string" and id:sub(1,4)=="mos:" and value==true then disabled[id]=true end end
+            state.pins,state.order,state.disabled=pins,order,disabled
+            state.dnd=data.dnd==true
+        end
+    end
+    T.loadSettings()
+    local savedNotes=readJSON("maxwellos_notifications.json")
+    if savedNotes then for i=1,math.min(50,#savedNotes) do
+        local note=savedNotes[i]
+        if type(note)=="table" then T.notes[#T.notes+1]={title=clean(note.title,32),body=clean(note.body,180)} end
+    end end
+    function T.dnd() return state.dnd end
+    function T.notify(title,body,key)
+        if body=="" then return end
+        key=key or (title..":"..body)
+        local now=timer.curtime()
+        if T.seen[key] and now-T.seen[key]<2 then return end
+        T.seen[key]=now
+        local count=0;for _ in pairs(T.seen) do count=count+1 end
+        if count>128 then T.seen={[key]=now} end
+        if #T.notes>=50 then table.remove(T.notes) end
+        table.insert(T.notes,1,{title=clean(title,32),body=clean(body,180)})
+        save("maxwellos_notifications.json",T.notes)
+        if not state.dnd then T.toast=T.notes[1];T.toastUntil=timer.curtime()+4 end
+    end
+    function T.capture(entries)
+        T.all=entries
+        T.applyOrder()
+    end
+    function T.applyOrder()
+        local ranked={}
+        for index,id in ipairs(state.order) do if type(id)=="string" then ranked[id]=index end end
+        local entries={}
+        for _,entry in ipairs(T.all) do
+            if not state.disabled[entry.tab] and (T.query=="" or entry.name:lower():find(T.query:lower(),1,true)) then entries[#entries+1]=entry end
+        end
+        table.sort(entries,function(a,b)
+            local ar,br=ranked[a.tab] or 10000,ranked[b.tab] or 10000
+            if ar~=br then return ar<br end
+            local ai,bi=1,1
+            for i,entry in ipairs(T.all) do if entry==a then ai=i end;if entry==b then bi=i end end
+            return ai<bi
+        end)
+        C.setEntries(entries)
+    end
+    function T.pin(tab)
+        for i,id in ipairs(state.pins) do if id==tab then table.remove(state.pins,i);save("maxwellos_desktop.json",state);return end end
+        if #state.pins>=5 then T.message="Unpin a shortcut first (five taskbar pins).";T.desktopMessage=T.message;return end
+        state.pins[#state.pins+1]=tab;save("maxwellos_desktop.json",state)
+    end
+    local function entryFor(tab)
+        for _,entry in ipairs(T.all) do if entry.tab==tab then return entry end end
+    end
+    function T.drawDesktop()
+        button(8,5,266,T.query=="" and "Search apps..." or T.query,T.searchFocus)
+        button(280,5,60,"Apps");button(346,5,70,"Alerts");button(422,5,82,"Windows")
+    end
+    function T.tasks()
+        local tasks,seen={},{}
+        local function add(tab)
+            tab=tab or "chatrooms";if tab==false then tab="chatrooms" end
+            if tab=="menu" or tab=="windows" then return end
+            local entry=entryFor(tab)
+            if not entry or seen[tab] or state.disabled[tab] then return end
+            seen[tab]=true
+            local item={tab=tab,name=entry.name,entry=entry,running=true,active=C.tab()==tab or (tab=="chatrooms" and not C.tab())}
+            for i,win in ipairs(T.windows) do
+                if (win.tab or "chatrooms")==tab then item.window=i;item.active=C.tab()=="windows" and T.focus==i end
+            end
+            tasks[#tasks+1]=item
+        end
+        if C.tab()~="menu" and C.tab()~="windows" then add(C.tab()) end
+        for _,win in ipairs(T.windows) do add(win.tab) end
+        for _,tab in ipairs(C.backgroundApps and C.backgroundApps() or {}) do add(tab) end
+        return tasks
+    end
+    function T.taskLayout()
+        local running,items,byTab=T.tasks(),{},{}
+        for _,item in ipairs(running) do byTab[item.tab]=item end
+        for _,tab in ipairs(state.pins) do
+            local entry=entryFor(tab)
+            if entry and not state.disabled[tab] then
+                items[#items+1]=byTab[tab] or {tab=tab,name=entry.name,entry=entry}
+                byTab[tab]=nil
+            end
+        end
+        for _,item in ipairs(running) do if byTab[item.tab] then items[#items+1]=item;byTab[item.tab]=nil end end
+        local capacity=10
+        T.taskPage=math.max(0,math.min(T.taskPage or 0,math.max(0,math.ceil(#items/capacity)-1)))
+        return items,44,capacity,39
+    end
+    function T.drawTaskbar()
+        render.setColor(Color(24,27,34,248));render.drawRect(0,474,512,38)
+        render.setColor(Color(70,77,87));render.drawRect(0,474,512,1)
+        button(4,479,34,"OS",C.host.startOpen)
+        local tasks,left,capacity,width=T.taskLayout()
+        local start=T.taskPage*capacity+1
+        for i=start,math.min(#tasks,start+capacity-1) do
+            local item=tasks[i];local x=left+(i-start)*width
+            if item.active then render.setColor(theme().panel);render.drawRect(x,478,36,32) end
+            if C.icon then C.icon(item.entry,x+2,478) else text(x+3,487,item.name:sub(1,2)) end
+            if item.running then
+                render.setColor(item.active and theme().accent or theme().muted)
+                render.drawRect(x+5,508,26,2)
+            end
+        end
+        button(440,479,18,"<",false);button(460,479,18,">",false);button(482,479,26,"R",false)
+        local x,y=C.pointer()
+        if x and y and y>=474 and x>=left and x<434 then
+            local item=tasks[start+math.floor((x-left)/width)]
+            if item then
+                render.setColor(theme().panel);render.drawRect(12,447,488,24)
+                text(20,452,item.name..(item.running and " | Running" or " | Pinned shortcut"))
+            end
+        end
+    end
+    function T.taskbarClick(x,y,right)
+        if y<474 or (C.tab()~="menu" and C.tab()~="windows") then return false end
+        if x<40 then
+            if C.tab()~="menu" then C.open("menu") end
+            C.host.startOpen=not C.host.startOpen;return true
+        end
+        if x>=482 then C.open("menu");C.host.scan(true);return true end
+        if x>=440 then
+            local items,_,capacity=T.taskLayout()
+            if #items>capacity then T.taskPage=math.max(0,(T.taskPage or 0)+(x<460 and -1 or 1))
+            elseif C.tab()=="menu" and C.scrollDesktop then C.scrollDesktop(x<460 and -6 or 6) end
+            return true
+        end
+        local tasks,left,capacity,width=T.taskLayout()
+        if x<left or x>=434 then return true end
+        local item=tasks[T.taskPage*capacity+math.floor((x-left)/width)+1]
+        if not item then return true end
+        if right then T.pin(item.tab)
+        elseif item.window then
+            if C.tab()=="windows" then T.focusWindow(item.window) else T.focus=item.window;C.open("windows") end
+        else C.open(item.tab) end
+        return true
+    end
+    function T.desktopClick(x,y,right)
+        if T.taskbarClick(x,y,right) then return true end
+        if y<38 then
+            T.searchFocus=x<274
+            if x>=280 and x<340 then C.open("manager")
+            elseif x>=346 and x<416 then C.open("notifications")
+            elseif x>=422 then C.open("windows") end
+            return true
+        end
+        if y>=474 then return false end
+        local column,row=math.floor((x-8)/82),math.floor((y-38)/62)
+        if column<0 or column>=6 or row<0 or row>=7 or (x-8)%82>=76 or (y-38)%62>=60 then return false end
+        local index=((C.desktopTop() or 0)+column)*7+row+1
+        local entry=C.entries()[index]
+        if not entry then return true end
+        C.select(index)
+        if right then T.pin(entry.tab);return true end
+        T.searchFocus=false
+        if C.mouseHeld() then
+            T.drag={tab=entry.tab,x=x,y=y,index=index}
+        else C.open(entry.tab) end
+        return true
+    end
+    function T.desktopKey(key,enter,character)
+        if not T.searchFocus then return false end
+        if key==27 or key==169 then T.query="";T.searchFocus=false
+        elseif key==8 or key==127 then T.query=T.query:sub(1,-2)
+        elseif enter then
+            local entry=C.entries()[C.selection()]
+            if entry then T.searchFocus=false;C.open(entry.tab) end
+            return true
+        elseif key==17 or key==18 or key==19 or key==20 then return false
+        elseif character and #T.query<32 then T.query=T.query..character
+        else return true end
+        T.applyOrder();return true
+    end
+    local function managerList() return T.all end
+    function T.managerAction(action)
+        local entry=managerList()[T.selected]
+        if not entry then return end
+        local app=C.host.installed[entry.tab:sub(1,4)=="mos:" and entry.tab:sub(5) or ""]
+        if action=="pin" then T.pin(entry.tab)
+        elseif action=="open" then C.open(entry.tab)
+        elseif not app then T.message="Built-in app: use Open or Pin."
+        elseif action=="disable" then
+            state.disabled[entry.tab]=not state.disabled[entry.tab] or nil
+            if state.disabled[entry.tab] then
+                if C.unloadApp then C.unloadApp(app.id) end
+                for i=#T.windows,1,-1 do if T.windows[i].tab==entry.tab then T.closeWindow(i) end end
+            end
+            save("maxwellos_desktop.json",state);T.applyOrder()
+        elseif action=="reload" then
+            C.host.active=app;C.host.reloadActive();C.host.switch(nil)
+            C.rebuild();T.message="Reload requested for "..entry.name
+        end
+    end
+    function T.drawManager()
+        text(22,84,"App Manager",theme().accent)
+        T.top=math.max(1,math.min(T.top,T.selected))
+        if T.selected>T.top+6 then T.top=T.selected-6 end
+        for i=T.top,math.min(#T.all,T.top+6) do
+            local entry=T.all[i]
+            local app=entry.tab:sub(1,4)=="mos:" and C.host.installed[entry.tab:sub(5)]
+            local status=state.disabled[entry.tab] and "Disabled" or (app and (app.error and "Error" or (app.waitingCompanions and "Loading" or "Installed")) or "Built-in")
+            button(20,110+(i-T.top)*28,472,entry.name.." | "..status,i==T.selected)
+        end
+        local entry=T.all[T.selected]
+        local app=entry and entry.tab:sub(1,4)=="mos:" and C.host.installed[entry.tab:sub(5)]
+        if app then
+            local count=0;for _ in pairs(app.dependencies or {}) do count=count+1 end
+            if T.checkedApp~=app or timer.curtime()>=(T.nextFileCheck or 0) then
+                T.checkedApp,T.nextFileCheck,T.fileStatus=app,timer.curtime()+5,nil
+                for path,source in pairs(app.dependencies or {}) do
+                    local ok,current=pcall(C.host.read,path)
+                    if not ok or current==nil then T.fileStatus="Missing: "..path;break
+                    elseif current~=source then T.fileStatus="File changed; Reload to apply." end
+                end
+            end
+            text(22,318,"Dependencies: "..count.." | "..(T.fileStatus or app.companionError or app.error or (app.api.lastReply and (app.api.lastReply.ok and "Last request OK" or "Last request failed") or "No companion reply yet")))
+            text(22,343,app.path,theme().muted)
+            local companions=0;for _ in pairs(app.autoCompanions or {}) do companions=companions+1 end
+            text(22,365,"Companion modules: "..companions..(app.waitingCompanions and " | Waiting for install" or ""),theme().muted)
+        end
+        for i,label in ipairs({"Open","Reload",entry and state.disabled[entry.tab] and "Enable" or "Disable","Pin/Unpin"}) do button(20+(i-1)*120,383,114,label) end
+        text(22,431,T.message~="" and T.message or "Arrows select; Enter opens. R reloads, D disables, P pins.",theme().muted)
+    end
+    function T.drawToast()
+        if not C.running() or state.dnd or T.inWindowRender or not T.toast or timer.curtime()>=(T.toastUntil or 0) then return end
+        render.setColor(theme().panel);render.drawRect(258,42,246,54)
+        text(266,49,T.toast.title:sub(1,28),theme().accent)
+        text(266,72,T.toast.body:sub(1,32))
+    end
+    function T.drawNotifications()
+        text(22,84,"Notification Center",theme().accent)
+        button(22,112,222,state.dnd and "Do Not Disturb: ON" or "Do Not Disturb: OFF",state.dnd)
+        button(262,112,222,"Clear notifications")
+        T.top=math.max(1,math.min(T.top,math.max(1,#T.notes-3)))
+        for i=T.top,math.min(#T.notes,T.top+3) do
+            local y=157+(i-T.top)*67
+            text(24,y,T.notes[i].title,theme().accent)
+            local lines=C.wrap(T.notes[i].body,454)
+            for n=1,math.min(2,#lines) do text(24,y+20+(n-1)*18,lines[n]) end
+        end
+        if #T.notes==0 then text(24,180,"No notifications yet.",theme().muted) end
+        text(22,449,"Up/Down scrolls | D toggles quiet mode | C clears",theme().muted)
+    end
+    local fixedFiles={"maxwellos_profile.txt","maxwellos_wallpaper.txt","maxwellnet_bookmarks.json","maxwellos_desktop.json","maxwellos_notifications.json"}
+    for i=1,5 do fixedFiles[#fixedFiles+1]=i==1 and "maxwellos_painting.txt" or "maxwellos_painting_"..i..".txt" end
+    local function permittedFile(name)
+        for _,fixed in ipairs(fixedFiles) do if name==fixed then return true end end
+        if #name>100 or name:sub(1,7)~="mosapp_" or name:sub(-4)~=".txt" then return false end
+        for i=8,#name-4 do
+            local byte=name:byte(i)
+            if not ((byte>=48 and byte<=57) or (byte>=65 and byte<=90) or (byte>=97 and byte<=122) or byte==45 or byte==95) then return false end
+        end
+        return #name>12
+    end
+    function T.exportProfile()
+        local ok,err=pcall(function()
+            local data={format="MaxwellOS profile 1",profile=C.profile(),files={}}
+            local names={};for _,name in ipairs(fixedFiles) do names[#names+1]=name end
+            local extra=file.find("mosapp_*.txt")
+            for i=1,math.min(type(extra)=="table" and #extra or 0,128) do names[#names+1]=extra[i] end
+            local bytes=0
+            for _,name in ipairs(names) do
+                if permittedFile(name) then
+                    local contents=file.read(name)
+                    if contents then
+                        assert(#contents<=32768,"One save exceeds 32768 bytes")
+                        bytes=bytes+#contents;assert(bytes<=524288,"Profile exceeds 512 KB")
+                        data.files[name]=contents
+                    end
+                end
+            end
+            file.write("maxwellos_profile_export.json",json.encode(data))
+        end)
+        T.message=ok and "Exported sf_filedata/maxwellos_profile_export.json" or clean(err,90)
+    end
+    function T.importProfile()
+        if C.room()~="" then T.message="Leave the chatroom before importing a profile.";return end
+        local data=readJSON("maxwellos_profile_export.json",1048576)
+        if not data or data.format~="MaxwellOS profile 1" or type(data.files)~="table" or not C.validateProfile(data.profile) then T.message="Profile export is missing or invalid.";return end
+        local ok,err=pcall(function()
+            local total,count=0,0
+            for name,value in pairs(data.files) do
+                assert(type(name)=="string" and permittedFile(name) and type(value)=="string" and #value<=32768,"Invalid profile file")
+                count=count+1;total=total+#value
+                assert(count<=140 and total<=524288,"Profile exceeds import limits")
+            end
+            local backup={}
+            for name in pairs(data.files) do backup[name]=file.read(name) or false end
+            file.write("maxwellos_profile_import_backup.json",json.encode(backup))
+            local written={}
+            local saved,problem=pcall(function()
+                for name,value in pairs(data.files) do file.write(name,value);written[#written+1]=name end
+            end)
+            if not saved then
+                for _,name in ipairs(written) do
+                    if backup[name] then pcall(file.write,name,backup[name]) else pcall(file.delete,name) end
+                end
+                error(problem)
+            end
+            C.applyProfile(data.profile);T.loadSettings();T.applyOrder()
+        end)
+        T.message=ok and "Profile imported. Previous files backed up in sf_filedata." or clean(err,90)
+    end
+    function T.drawProfile()
+        text(22,85,"Profile Transfer",theme().accent)
+        text(22,128,"Includes colors, name, desktop layout, website favorites,")
+        text(22,151,"wallpaper selection, five Paint slots and app saves.")
+        text(22,187,"The wallpaper image and installed app source stay separate.",theme().muted)
+        button(22,230,462,"Export to maxwellos_profile_export.json")
+        button(22,275,462,"Import that file (leave your chatroom first)")
+        text(22,330,"Copy the export JSON to another player's sf_filedata folder.",theme().muted)
+        for i,line in ipairs(C.wrap(T.message,458)) do if i<=4 then text(22,374+(i-1)*20,line) end end
+        text(22,464,"E exports | I imports",theme().muted)
+    end
+    T.dashboard={values={},labels={},outputs={}}
+    function T.requestDashboard(index,value)
+        if net.getBytesLeft()<64 then T.message="Connection busy.";return end
+        net.start("mos_dashboard_request");net.writeBool(index~=nil)
+        if index then net.writeUInt(index,3);net.writeFloat(value) end
+        net.send()
+    end
+    net.receive("mos_dashboard_state",function()
+        for i=1,4 do T.dashboard.values[i]=net.readFloat();T.dashboard.labels[i]=net.readString();T.dashboard.outputs[i]=net.readFloat() end
+    end)
+    function T.drawDashboard()
+        text(22,84,"Wire Dashboard",theme().accent)
+        for i=1,4 do
+            local y=120+(i-1)*70
+            text(24,y,T.dashboard.labels[i] or "Input "..i)
+            text(24,y+23,tostring(T.dashboard.values[i] or 0),theme().muted)
+            button(260,y,224,"Control "..i..": "..tostring(T.dashboard.outputs[i] or 0),i==T.selected)
+        end
+        text(22,418,"Click a control to toggle its Wire output between 0 and 1.",theme().muted)
+        text(22,445,"Type a number; Enter sets selected output: "..(T.number or ""),theme().accent)
+    end
+    function T.paintBegin()
+        local p=C.paint
+        local before=p.encode()
+        if T.undo[#T.undo]~=before then T.undo[#T.undo+1]=before;if #T.undo>20 then table.remove(T.undo,1) end end
+        T.redo={}
+    end
+    function T.paintHistory(redo)
+        local source,destination=redo and T.redo or T.undo,redo and T.undo or T.redo
+        local previous=table.remove(source)
+        if not previous then return end
+        destination[#destination+1]=C.paint.encode()
+        C.paint.rows,C.paint.runs=C.paint.decode(previous)
+        C.paint.dragging=false;T.shapeStart=nil
+    end
+    function T.paintPoint(x,y)
+        if T.paintTool~="line" and T.paintTool~="rect" then return false end
+        if not T.shapeStart then T.shapeStart={x,y};return true end
+        T.paintBegin()
+        local a=T.shapeStart;T.shapeStart=nil
+        local function line(x0,y0,x1,y1)
+            local dx,dy=math.abs(x1-x0),-math.abs(y1-y0)
+            local sx,sy=x0<x1 and 1 or -1,y0<y1 and 1 or -1
+            local err=dx+dy
+            while true do
+                C.paint.pixel(x0,y0);if x0==x1 and y0==y1 then break end
+                local twice=err*2
+                if twice>=dy then err=err+dy;x0=x0+sx end
+                if twice<=dx then err=err+dx;y0=y0+sy end
+            end
+        end
+        if T.paintTool=="rect" then
+            line(a[1],a[2],x,a[2]);line(x,a[2],x,y);line(x,y,a[1],y);line(a[1],y,a[1],a[2])
+        else line(a[1],a[2],x,y) end
+        return true
+    end
+    function T.paintKey(key)
+        if C.paint.menu then return false end
+        if key==102 or key==70 then T.paintTool="brush";T.shapeStart=nil;return false end
+        if key==122 or key==90 then T.paintHistory(false)
+        elseif key==121 or key==89 then T.paintHistory(true)
+        elseif key==105 or key==73 then T.paintTool="line";C.paint.bucket=false;T.shapeStart=nil
+        elseif key==113 or key==81 then T.paintTool="rect";C.paint.bucket=false;T.shapeStart=nil
+        elseif key==112 or key==80 then T.paintTool="brush";C.paint.bucket=false;T.shapeStart=nil
+        else return false end
+        return true
+    end
+    function T.paintClick(x,y)
+        if C.paint.menu then return false end
+        if x>=16 and x<50 and y>=340 and y<384 then T.paintTool="brush";T.shapeStart=nil;return false end
+        if x>=16 and x<50 and y>=80 and y<270 then
+            local tool=math.floor((y-80)/38)+1
+            if tool==1 then T.paintHistory(false)
+            elseif tool==2 then T.paintHistory(true)
+            else T.paintTool=({[3]="brush",[4]="line",[5]="rect"})[tool];C.paint.bucket=false;T.shapeStart=nil end
+            return true
+        end
+        return false
+    end
+    function T.drawPaintTools()
+        if C.paint.menu then return end
+        for i,name in ipairs({"Z","Y","P","I","Q"}) do button(16,80+(i-1)*38,34,name,({[3]="brush",[4]="line",[5]="rect"})[i]==T.paintTool) end
+        if T.shapeStart then text(18,461,"Select the second corner / endpoint.",theme().accent) end
+    end
+    function T.openWindow(tab)
+        if #T.windows>=2 then T.message="Close a window first (two live windows).";return end
+        if tab=="chatrooms" then tab=false end
+        local allowed=tab==false or tab=="calculator" or tab=="website" or tab=="files" or (type(tab)=="string" and tab:sub(1,4)=="mos:")
+        if not allowed then T.message="Window apps: Chatrooms, Calculator, Websites, Files and installed apps.";return end
+        for i,win in ipairs(T.windows) do if win.tab==tab then T.focusWindow(i);return end end
+        T.nextWindow=T.nextWindow+1
+        T.windows[#T.windows+1]={tab=tab,x=18+(#T.windows)*155,y=112+(#T.windows)*42,w=292,h=294,target="mos_window_"..T.nextWindow}
+        T.focusWindow(#T.windows)
+    end
+    function T.focusWindow(index)
+        T.focus=index
+        local win=T.windows[index]
+        if win then C.activateWindow(win.tab) end
+    end
+    function T.closeWindow(index)
+        local win=table.remove(T.windows,index)
+        if win and render.renderTargetExists(win.target) then render.destroyRenderTarget(win.target) end
+        T.focus=0
+        if #T.windows>0 then
+            if C.tab()=="windows" then T.focusWindow(#T.windows) else T.focus=#T.windows end
+        else C.host.switch(nil);if C.stopWebsite then C.stopWebsite() end end
+    end
+    function T.webVisible()
+        if C.tab()~="windows" then return false end
+        for _,win in ipairs(T.windows) do if win.tab=="website" then return true end end
+        return false
+    end
+    function T.windowOptions()
+        local choices={}
+        for _,entry in ipairs(T.all) do
+            if entry.tab=="calculator" or entry.tab=="chatrooms" or entry.tab=="website" or entry.tab=="files" or entry.tab:sub(1,4)=="mos:" then
+                if not state.disabled[entry.tab] then choices[#choices+1]=entry end
+            end
+        end
+        return choices
+    end
+    function T.drawWindows()
+        if T.windowPicker then
+            local choices=T.windowOptions()
+            T.windowPick=math.max(1,math.min(T.windowPick or 1,#choices))
+            local first=math.max(1,T.windowPick-6)
+            text(24,85,"Choose a window app (Escape cancels)",theme().accent)
+            for i=first,math.min(#choices,first+6) do button(24,122+(i-first)*39,464,choices[i].name,i==T.windowPick) end
+            return
+        end
+        button(16,80,114,"+ Calculator");button(138,80,114,"+ Chatrooms");button(260,80,114,"+ Website");button(382,80,114,"+ App...")
+        local order={}
+        for i=1,#T.windows do if i~=T.focus then order[#order+1]=i end end
+        if T.windows[T.focus] then order[#order+1]=T.focus end
+        for _,i in ipairs(order) do
+            local win=T.windows[i]
+            render.setColor(theme().panel);render.drawRect(win.x,win.y,win.w,win.h)
+            render.setColor(i==T.focus and theme().accent or theme().muted);render.drawRect(win.x,win.y,win.w,24)
+            local entry=entryFor(win.tab==false and "chatrooms" or win.tab)
+            text(win.x+5,win.y+5,entry and entry.name:sub(1,22) or "Chatrooms",theme().background)
+            text(win.x+win.w-39,win.y+5,"[] X",theme().background)
+            if render.renderTargetExists(win.target) then
+                render.setColor(Color(255,255,255));render.setRenderTargetTexture(win.target)
+                render.drawTexturedRectUV(win.x+2,win.y+26,win.w-4,win.h-28,0,0,0.5,0.5);render.setMaterial()
+            else text(win.x+8,win.y+50,win.error or "Preparing window...") end
+        end
+        if #T.windows==0 then text(24,155,"Open two apps above. Drag title bars; [] opens full-screen.",theme().muted) end
+    end
+    hook.add("renderoffscreen","maxwellos_app_windows",function()
+        if C.tab()~="windows" or not C.running() then return end
+        if not hasPermission("render.offscreen") then T.message="Grant offscreen-render permission for app windows.";return end
+        if timer.curtime()<(T.nextFrame or 0) then return end
+        T.nextFrame=timer.curtime()+0.125
+        for _,win in ipairs(T.windows) do
+            if not win.error and not (type(win.tab)=="string" and win.tab:sub(1,4)=="mos:" and win~=T.windows[T.focus]) then
+                local ok,err=pcall(function()
+                    if not render.renderTargetExists(win.target) then render.createRenderTarget(win.target) end
+                    render.selectRenderTarget(win.target);render.clear(theme().background)
+                    C.renderWindow(win.tab)
+                end)
+                render.selectRenderTarget()
+                if not ok then win.error=clean(err,90);T.notify("Window error",win.error) end
+            end
+        end
+    end)
+    function T.windowClick(x,y,right)
+        if T.windowPicker then
+            local choices=T.windowOptions();local first=math.max(1,(T.windowPick or 1)-6)
+            if y>=122 and y<395 then
+                local entry=choices[first+math.floor((y-122)/39)]
+                if entry then T.windowPicker=false;T.openWindow(entry.tab) end
+            end
+            return
+        end
+        if y>=80 and y<110 then
+            if x<138 then T.openWindow("calculator")
+            elseif x<260 then T.openWindow(false)
+            elseif x<382 then T.openWindow("website")
+            else T.windowPicker=true;T.windowPick=1 end
+            return
+        end
+        local order={T.focus}
+        for i=#T.windows,1,-1 do if i~=T.focus then order[#order+1]=i end end
+        for _,i in ipairs(order) do
+            local win=T.windows[i]
+            if win and inside(x,y,win.x,win.y,win.w,win.h) then
+                if i~=T.focus then T.focusWindow(i) end
+                if y<win.y+24 then
+                    if x>=win.x+win.w-20 then T.closeWindow(i)
+                    elseif x>=win.x+win.w-44 then C.open(win.tab==false and nil or win.tab)
+                    else T.windowDrag={win=win,dx=x-win.x,dy=y-win.y} end
+                else C.clickWindow(win,(x-win.x-2)/(win.w-4)*512,(y-win.y-26)/(win.h-28)*512,right) end
+                return
+            end
+        end
+    end
+    function T.handles(tab) return tab=="manager" or tab=="notifications" or tab=="profile" or tab=="dashboard" or tab=="windows" end
+    function T.draw(tab)
+        if tab=="manager" then T.drawManager()
+        elseif tab=="notifications" then T.drawNotifications()
+        elseif tab=="profile" then T.drawProfile()
+        elseif tab=="dashboard" then T.drawDashboard()
+        else T.drawWindows() end
+    end
+    function T.click(tab,x,y,right)
+        if tab=="windows" then T.windowClick(x,y,right)
+        elseif tab=="manager" then
+            if y>=110 and y<306 then T.selected=math.min(#T.all,T.top+math.floor((y-110)/28))
+            elseif y>=383 and y<413 then T.managerAction(({"open","reload","disable","pin"})[math.floor((x-20)/120)+1]) end
+        elseif tab=="notifications" and y>=112 and y<142 then
+            if x<250 then state.dnd=not state.dnd;save("maxwellos_desktop.json",state)
+            else T.notes={};T.seen={};save("maxwellos_notifications.json",T.notes) end
+        elseif tab=="profile" then
+            if y>=230 and y<260 then T.exportProfile() elseif y>=275 and y<305 then T.importProfile() end
+        elseif tab=="dashboard" and x>=260 and y>=120 and y<400 then
+            local index=math.floor((y-120)/70)+1;T.selected=index;T.requestDashboard(index,T.dashboard.outputs[index]==0 and 1 or 0)
+        end
+    end
+    function T.key(tab,key,enter,character)
+        if tab=="windows" then
+            if T.windowPicker then
+                local choices=T.windowOptions()
+                if key==17 then T.windowPick=math.max(1,(T.windowPick or 1)-1)
+                elseif key==18 then T.windowPick=math.min(#choices,(T.windowPick or 1)+1)
+                elseif key==27 or key==169 then T.windowPicker=false
+                elseif enter then local entry=choices[T.windowPick or 1];if entry then T.windowPicker=false;T.openWindow(entry.tab) end end
+                return
+            end
+            local win=T.windows[T.focus]
+            if win then C.keyWindow(win,key) end
+        elseif tab=="manager" then
+            if key==17 then T.selected=math.max(1,T.selected-1) elseif key==18 then T.selected=math.min(#T.all,T.selected+1)
+            elseif enter then T.managerAction("open") elseif key==114 or key==82 then T.managerAction("reload")
+            elseif key==100 or key==68 then T.managerAction("disable") elseif key==112 or key==80 then T.managerAction("pin") end
+        elseif tab=="notifications" then
+            if key==17 then T.top=math.max(1,T.top-1) elseif key==18 then T.top=T.top+1
+            elseif key==100 or key==68 then state.dnd=not state.dnd;save("maxwellos_desktop.json",state)
+            elseif key==99 or key==67 then T.notes={};T.seen={};save("maxwellos_notifications.json",T.notes) end
+        elseif tab=="profile" then
+            if key==101 or key==69 then T.exportProfile() elseif key==105 or key==73 then T.importProfile() end
+        elseif tab=="dashboard" then
+            if key==17 then T.selected=math.max(1,T.selected-1) elseif key==18 then T.selected=math.min(4,T.selected+1)
+            elseif enter then local value=tonumber(T.number);if value and value==value and math.abs(value)<=1000000 then T.requestDashboard(T.selected,value);T.number="" end
+            elseif key==8 or key==127 then T.number=(T.number or ""):sub(1,-2)
+            elseif character and #((T.number) or "")<12 and character:find("[0-9.-]") then T.number=(T.number or "")..character end
+        end
+    end
+    hook.add("think","maxwellos_desktop_tools",function()
+        if not C.running() then T.drag=nil;T.windowDrag=nil;return end
+        local x,y,held=C.pointer()
+        if C.tab()~="menu" then T.drag=nil end
+        if T.drag then
+            local drag=T.drag
+            if x and (math.abs(x-drag.x)>5 or math.abs(y-drag.y)>5) then drag.moved=true end
+            if not held then
+                if drag.moved and x then
+                    local column,row=math.floor((x-8)/82),math.floor((y-38)/62)
+                    local target=((C.desktopTop() or 0)+column)*7+row+1
+                    if column>=0 and column<6 and row>=0 and row<7 then
+                        local entries=C.entries();local moving=table.remove(entries,drag.index)
+                        if moving then table.insert(entries,math.min(#entries+1,target),moving);state.order={}
+                            for _,entry in ipairs(entries) do state.order[#state.order+1]=entry.tab end
+                            save("maxwellos_desktop.json",state);T.applyOrder()
+                        end
+                    end
+                elseif not drag.moved and T.lastClick==drag.tab and timer.curtime()-(T.lastClickAt or 0)<0.4 then C.open(drag.tab)
+                else T.lastClick,T.lastClickAt=drag.tab,timer.curtime() end
+                T.drag=nil
+            end
+        end
+        if T.windowDrag then
+            if held and x then
+                local drag=T.windowDrag;drag.win.x=math.max(4,math.min(508-drag.win.w,x-drag.dx));drag.win.y=math.max(112,math.min(472-drag.win.h,y-drag.dy))
+            else T.windowDrag=nil end
+        end
+        for i=#T.windows,1,-1 do if T.windows[i].closeRequested then T.closeWindow(i) end end
+        if C.tab()=="dashboard" and timer.curtime()>=(T.nextDashboard or 0) then T.nextDashboard=timer.curtime()+0.5;T.requestDashboard() end
+        if C.tab()=="windows" then
+            local win=T.windows[T.focus]
+            if win and type(win.tab)=="string" and win.tab:sub(1,4)=="mos:" then
+                local app=C.host.active
+                if app then
+                    C.host.pumpCompanions();C.host.processReplies(app)
+                    if app.reloadRequested then C.host.reloadActive()
+                    elseif not app.waitingCompanions and not app.error then
+                        local now=timer.curtime();C.host.call(app,"update",math.min(0.05,math.max(0,now-(T.appTick or now))),now);T.appTick=now
+                    end
+                end
+            end
+        end
+    end)
+    hook.add("removed","maxwellos_window_cleanup",function()
+        for _,win in ipairs(T.windows) do if render.renderTargetExists(win.target) then render.destroyRenderTarget(win.target) end end
+    end)
+    return T
+end
+
+end)()({
     host=PHONE.appHost,paint=PHONE.paint,
     theme=function() return {background=background,panel=panel,accent=accent,text=ink,muted=muted} end,
     label=function(x,y,text,color) label(x,y,text,color,PHONE.toolsFont) end,
