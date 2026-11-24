@@ -2,7 +2,7 @@
 
 A Starfall desktop for Garry's Mod with local apps, chatrooms, MaxwellNET websites, games, Paint and music.
 
-Computer and chatroom server: **v50.4**. The standalone phone uses the same release version and includes the current shared desktop features.
+Computer and chatroom server: **v50.5**. The standalone phone uses the same release version and includes the current shared desktop features.
 
 ## Install
 

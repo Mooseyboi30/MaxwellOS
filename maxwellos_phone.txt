@@ -1,7 +1,7 @@
 --@name MaxwellOS Phone
 --@shared
-local CHIP_VERSION = "50.4"
-local CHATROOM_VERSION = "50.4"
+local CHIP_VERSION = "50.5"
+local CHATROOM_VERSION = "50.5"
 -- Companion runtime is bundled so the standalone phone uploads as one file.
 local MOS_SERVICES=(function()
 -- Hosted companion modules share this processor's Starfall permissions and quota.
@@ -802,6 +802,7 @@ end
 do
 -- Get matching chip versions at https://github.com/Mooseyboi30/MaxwellOS
 local CHANGELOG = {
+    {"v50.5", "Fixed long Website Maker text being truncated, overflowing editor properties and losing wrapped lines in Website Viewer. Text boxes support up to 512 bytes and render lines within their height."},
     {"v50.3", "Fixed phone update detection to check the phone release separately from chatroom compatibility."},
     {"Desktop tools", "Added App Manager, search, saved icon order and pins, notifications and quiet mode, profile transfer, Wire Dashboard, two app windows with running taskbar icons, and Paint undo/redo and shape tools."},
     {"App packages", "Phone supports mosapps packages, helper modules, bundled automatic companions, the sprite demo, physical/Wire keyboard rollover, Paint dragging, and Website Maker discovery fixes."},
@@ -997,7 +998,7 @@ function MAXWELLNET.validFrame(frame)
             if type(value) ~= "number" or not (value >= 0 and value <= limit) then return false end
         end
         if command[2] + command[4] > 512 or command[3] + command[5] > 1023 then return false end
-        if command[1] == "text" and (type(command[9]) ~= "string" or #command[9] > 96) then return false end
+        if command[1] == "text" and (type(command[9]) ~= "string" or #command[9] > 512) then return false end
     end
     return true
 end
@@ -1856,7 +1857,7 @@ net.receive("room_website_frame_request", function(_, ply)
             copy[i] = number
         end
         if command[1] == "text" then
-            if type(command[9]) ~= "string" or #command[9] > 96 then return end
+            if type(command[9]) ~= "string" or #command[9] > 512 then return end
             copy[9] = command[9]
         end
         commands[#commands + 1] = copy
@@ -4641,7 +4642,7 @@ function PHONE.maker.document()
         seen[page.route]=true
         result[page.route]={}
         for index,item in ipairs(page.items) do
-            local copy={type=item.type,text=item.text:sub(1,80),message=item.message:sub(1,120),target=item.target}
+            local copy={type=item.type,text=item.text,message=item.message:sub(1,120),target=item.target}
             for _,key in ipairs({"x","y","w","h"}) do
                 local value=tonumber(item[key])
                 if not value or value~=value or value%1~=0 or value<0 or value>1023 then return nil,"Positions and sizes must be whole positive numbers." end
@@ -4787,7 +4788,8 @@ function PHONE.maker.key(key,enter,character)
     elseif key==8 or key==127 then app.set(app.property,app.value(app.property):sub(1,-2))
     elseif character then
         local value=app.value(app.property)
-        local limit=app.property==1 and 32 or (app.property==10 and 64 or 120)
+        local _,item=app.current()
+        local limit=app.property==1 and 32 or (app.property==4 and (item and item.type=="text" and 512 or 80) or (app.property==10 and 64 or 120))
         if #value+#character<=limit then app.set(app.property,value..character) end
     end
 end
@@ -4842,7 +4844,8 @@ function PHONE.maker.draw()
         local y=164+(i-1)*28
         render.setColor(i==app.property and accent or panel)
         render.drawRect(16,y,244,25)
-        label(22,y+4,name..": "..value:sub(-22),i==app.property and background or ink,smallFont)
+        local rows=wrapText(name..": "..value,230,smallFont)
+        label(22,y+4,rows[#rows] or (name..": "),i==app.property and background or ink,smallFont)
     end
     local first=math.max(1,app.selected-3)
     for i=first,math.min(#page.items,first+3) do
@@ -4861,7 +4864,13 @@ function PHONE.maker.draw()
                 render.setColor(element.type=="button" and Color(45,115,108) or panel)
                 render.drawRect(px,py,math.max(1,w*scale),math.max(1,h*scale))
             end
-            label(px,py,element.text:sub(1,14),ink,smallFont)
+            render.setFont(smallFont)
+            local _,lineHeight=render.getTextSize("Ag")
+            lineHeight=math.max(1,lineHeight)
+            for i,line in ipairs(wrapText(element.text,math.max(1,w*scale),smallFont)) do
+                if i*lineHeight>h*scale then break end
+                label(px,py+(i-1)*lineHeight,line,ink,smallFont)
+            end
         end
     end
     label(22,463,app.notice,ink,smallFont)
@@ -7999,10 +8008,20 @@ local function drawWebsiteFrame(frame, face, scroll)
                         render.setColor(color)
                         render.drawRect(left + x * scale, top + first * scale, w * scale, (last - first) * scale)
                     end
-                elseif kind == "text" and y >= 0 and y + h <= 512 and type(value) == "string" and #value <= 96 then
-                    for _, line in ipairs(wrapText(value, w * scale, face)) do
-                        label(left + x * scale, top + y * scale, line, color, face)
-                        break
+                elseif kind == "text" and y >= 0 and y + h <= 512 and type(value) == "string" and #value <= 512 then
+                    render.setFont(face)
+                    local _,lineHeight=render.getTextSize("Ag")
+                    lineHeight=math.max(1,lineHeight)
+                    local offset=0
+                    for paragraph in (value.."\n"):gmatch("([^\n]*)\n") do
+                        local lines=wrapText(paragraph,w*scale,face)
+                        if #lines==0 then lines={""} end
+                        for _,line in ipairs(lines) do
+                            if offset+lineHeight>h*scale then break end
+                            label(left+x*scale,top+y*scale+offset,line,color,face)
+                            offset=offset+lineHeight
+                        end
+                        if offset+lineHeight>h*scale then break end
                     end
                 end
             end

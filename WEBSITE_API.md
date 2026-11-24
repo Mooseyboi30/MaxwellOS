@@ -58,7 +58,7 @@ A frame contains 1–384 commands.
 {"text", x, y, width, height, red, green, blue, text}
 ```
 
-Coordinates are page coordinates. Pages are 512 units wide and 512–1023 units tall. Keep each box inside the page bounds, with a maximum width and height of 512. RGB values must be 0–255. Text supports 96 bytes per command and displays on one line. Invalid frames produce an error message. A feed that stops responding shows a retry prompt after five seconds.
+Coordinates are page coordinates. Pages are 512 units wide and 512–1023 units tall. Keep each box inside the page bounds, with a maximum width and height of 512. RGB values must be 0–255. On v50.5 and newer, text supports 512 bytes per command and wraps across lines within the box height, including explicit newlines. Older viewers support only 96 bytes and one displayed line. Invalid frames produce an error message. A feed that stops responding shows a retry prompt after five seconds.
 
 The first options value sets the page height. Heights above 512 enable Up/Down scrolling. The viewer fetches graphics for the selected site and route. Compute animation from the site's own clock or server state.
 
